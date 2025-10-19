@@ -192,6 +192,7 @@ pub enum ConnectorType {
     PostgreSQL,
     MySQL,
     SQLite,
+    SqlServer,
     File,
     Rest,
     LLM,

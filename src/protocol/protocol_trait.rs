@@ -9,6 +9,7 @@ pub enum ProtocolType {
     PostgreSQL,
     MySQL,
     SQLite,
+    SqlServer,
 }
 
 /// Connection state for protocol adapters

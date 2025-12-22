@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use std::collections::HashMap;
 use crate::utils::{
     types::{ConnectorType, ConnectorQuery, QueryResult, Schema},
-    error::{ConnectorError, NirvResult},
+    error::NirvResult,
 };
 
 /// Configuration for connector initialization

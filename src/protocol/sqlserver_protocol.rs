@@ -199,7 +199,7 @@ impl SqlServerProtocol {
     }
     
     /// Create column metadata token
-    fn create_colmetadata(&self, columns: &[ColumnMetadata]) -> Vec<u8> {
+    pub fn create_colmetadata(&self, columns: &[ColumnMetadata]) -> Vec<u8> {
         let mut token = Vec::new();
         
         // ColMetadata token
@@ -246,7 +246,7 @@ impl SqlServerProtocol {
     }
     
     /// Create a data row token
-    fn create_row(&self, row: &Row, columns: &[ColumnMetadata]) -> Vec<u8> {
+    pub fn create_row(&self, row: &Row, columns: &[ColumnMetadata]) -> Vec<u8> {
         let mut token = Vec::new();
         
         // Row token
@@ -300,7 +300,7 @@ impl SqlServerProtocol {
     }
     
     /// Create a DONE token
-    fn create_done(&self, status: u16, cur_cmd: u16, row_count: u64) -> Vec<u8> {
+    pub fn create_done(&self, status: u16, cur_cmd: u16, row_count: u64) -> Vec<u8> {
         let mut token = Vec::new();
         
         // Done token
@@ -394,6 +394,8 @@ impl SqlServerProtocol {
             Value::Json(_) => TdsDataType::NVarChar as u8,
         }
     }
+    
+
 }
 
 impl Default for SqlServerProtocol {

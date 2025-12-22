@@ -3,9 +3,20 @@ name = "nirv-engine"
 version = "0.1.0"
 edition = "2021"
 authors = ["NIRV Team"]
-description = "Universal data virtualization and compute orchestration engine"
+description = "Universal data virtualization and compute orchestration engine with SQL Server, PostgreSQL, REST API, and file system connectors"
 license = "MIT"
 repository = "https://github.com/nirv/nirv-engine"
+homepage = "https://github.com/nirv/nirv-engine"
+documentation = "https://docs.rs/nirv-engine"
+readme = "README.md"
+keywords = ["database", "sql", "virtualization", "connector", "sqlserver"]
+categories = ["database", "network-programming", "api-bindings"]
+exclude = [
+    "tests/*",
+    "examples/*",
+    ".github/*",
+    "docs/*"
+]
 
 [dependencies]
 tokio = { version = "1.0", features = ["full"] }

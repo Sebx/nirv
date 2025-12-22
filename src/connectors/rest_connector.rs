@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::time::{Duration, Instant};
 use std::sync::Arc;
 use reqwest::{Client, Method, Response};
-use serde_json::{Value as JsonValue, Map};
+use serde_json::Value as JsonValue;
 use url::Url;
 use dashmap::DashMap;
 use tokio::time::sleep;

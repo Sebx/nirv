@@ -4,7 +4,7 @@ use crate::{
     engine::{ExecutionPlan, PlanNode},
     connectors::ConnectorRegistry,
     utils::{
-        types::{QueryResult, Value, ColumnMetadata, DataType, InternalQuery, QueryOperation, ConnectorQuery},
+        types::{QueryResult, Row, Value, ColumnMetadata, DataType, InternalQuery, QueryOperation, ConnectorQuery},
         error::{NirvResult, NirvError},
     },
 };

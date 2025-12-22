@@ -400,11 +400,12 @@ impl Connector for MockConnector {
                 if let Some(source) = query.query.sources.first() {
                     if let Some(table) = self.test_data.get(&source.identifier) {
                         let filtered_rows = self.apply_filters(&table.rows, &query);
-                        // Note: Limit is handled by the query executor, not the connector
+                        // Apply limit if specified
+                        let limited_rows = self.apply_limit(filtered_rows, query.query.limit);
                         
                         let result = QueryResult {
                             columns: table.schema.columns.clone(),
-                            rows: filtered_rows,
+                            rows: limited_rows,
                             affected_rows: None,
                             execution_time: start_time.elapsed(),
                         };

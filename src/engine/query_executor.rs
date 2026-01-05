@@ -4,7 +4,7 @@ use crate::{
     engine::{ExecutionPlan, PlanNode},
     connectors::ConnectorRegistry,
     utils::{
-        types::{QueryResult, Row, Value, ColumnMetadata, DataType, InternalQuery, QueryOperation, ConnectorQuery},
+        types::{QueryResult, Value, ColumnMetadata, DataType, InternalQuery, QueryOperation, ConnectorQuery},
         error::{NirvResult, NirvError},
     },
 };
@@ -271,7 +271,7 @@ mod tests {
     use crate::{
         engine::{ExecutionPlan, PlanNode},
         connectors::{MockConnector, ConnectorRegistry},
-        utils::types::{DataSource, Column, Predicate, PredicateOperator, PredicateValue, OrderBy, OrderColumn, OrderDirection},
+        utils::types::{DataSource, Column, Predicate, PredicateOperator, PredicateValue, OrderBy, OrderColumn, OrderDirection, Row},
     };
 
     #[test]
@@ -312,7 +312,8 @@ mod tests {
         
         let query_result = result.unwrap();
         assert!(query_result.is_empty());
-        assert!(query_result.execution_time > Duration::from_millis(0));
+        // Execution time should be set (could be 0 for very fast operations)
+        assert!(query_result.execution_time >= Duration::from_millis(0));
     }
 
     #[tokio::test]

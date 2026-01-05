@@ -107,8 +107,9 @@ pub mod protocol;
 pub mod cli;
 pub mod utils;
 
-pub use engine::*;
-pub use connectors::*;
-pub use protocol::*;
-pub use cli::*;
-pub use utils::*;
+// Re-export main modules
+pub use engine::{Engine, EngineBuilder, QueryParser, DefaultQueryParser, QueryPlanner, DefaultQueryPlanner, QueryExecutor, DefaultQueryExecutor, Dispatcher, DefaultDispatcher};
+pub use connectors::{Connector, ConnectorRegistry, ConnectorInitConfig, SqlServerConnector, PostgresConnector, RestConnector, FileConnector, MockConnector};
+pub use protocol::{ProtocolAdapter, Connection, Credentials, ProtocolQuery, ProtocolResponse, PostgresProtocol, SqlServerProtocol, MySQLProtocolAdapter, SQLiteProtocolAdapter};
+pub use cli::{CliRunner, CliArgs, OutputFormatter};
+pub use utils::{NirvResult, NirvError, QueryResult, Row, Value, DataType, ColumnMetadata};

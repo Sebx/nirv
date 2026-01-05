@@ -2,10 +2,9 @@ use nirv_engine::{
     Engine, EngineBuilder,
     DefaultQueryParser, DefaultQueryPlanner, DefaultQueryExecutor, DefaultDispatcher,
     MockConnector, ConnectorInitConfig, Connector,
-    EngineConfig, ProtocolConfig, DispatcherConfig, SecurityConfig,
     NirvResult, NirvError,
 };
-use nirv_engine::config::ProtocolType as ConfigProtocolType;
+use nirv_engine::utils::{EngineConfig, ProtocolConfig, DispatcherConfig, SecurityConfig, ConnectorConfig, ConnectorType, ProtocolType as ConfigProtocolType};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use std::collections::HashMap;
@@ -43,8 +42,8 @@ async fn test_engine_initialization_custom_config() -> NirvResult<()> {
     });
     
     // Add a mock connector configuration
-    config.connectors.insert("test_mock".to_string(), nirv_engine::ConnectorConfig {
-        connector_type: nirv_engine::ConnectorType::Mock,
+    config.connectors.insert("test_mock".to_string(), ConnectorConfig {
+        connector_type: ConnectorType::Mock,
         connection_string: None,
         parameters: HashMap::new(),
         pool_config: None,

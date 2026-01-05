@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use std::collections::HashMap;
 use tokio::net::TcpStream;
-use crate::utils::{NirvResult, ProtocolError, InternalQuery, QueryResult};
+use crate::utils::{NirvResult, QueryResult};
 
 /// Protocol types supported by NIRV Engine
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

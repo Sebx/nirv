@@ -14,15 +14,23 @@ const CLIENT_FOUND_ROWS: u32 = 0x00000002;
 const CLIENT_LONG_FLAG: u32 = 0x00000004;
 const CLIENT_CONNECT_WITH_DB: u32 = 0x00000008;
 const CLIENT_NO_SCHEMA: u32 = 0x00000010;
+#[allow(dead_code)]
 const CLIENT_COMPRESS: u32 = 0x00000020;
+#[allow(dead_code)]
 const CLIENT_ODBC: u32 = 0x00000040;
+#[allow(dead_code)]
 const CLIENT_LOCAL_FILES: u32 = 0x00000080;
+#[allow(dead_code)]
 const CLIENT_IGNORE_SPACE: u32 = 0x00000100;
 const CLIENT_PROTOCOL_41: u32 = 0x00000200;
+#[allow(dead_code)]
 const CLIENT_INTERACTIVE: u32 = 0x00000400;
+#[allow(dead_code)]
 const CLIENT_SSL: u32 = 0x00000800;
+#[allow(dead_code)]
 const CLIENT_IGNORE_SIGPIPE: u32 = 0x00001000;
 const CLIENT_TRANSACTIONS: u32 = 0x00002000;
+#[allow(dead_code)]
 const CLIENT_RESERVED: u32 = 0x00004000;
 const CLIENT_SECURE_CONNECTION: u32 = 0x00008000;
 const CLIENT_MULTI_STATEMENTS: u32 = 0x00010000;

@@ -1,3 +1,5 @@
+#![allow(unused)]
+
 use nirv_engine::{
     engine::{QueryPlanner, ExecutionPlan, PlanNode, DefaultQueryPlanner},
     utils::{

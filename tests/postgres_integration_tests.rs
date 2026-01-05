@@ -1,4 +1,7 @@
+#![allow(unused)]
+
 use nirv_engine::protocol::{ProtocolAdapter, PostgresProtocol, ProtocolType, Credentials};
+
 use nirv_engine::engine::{DefaultQueryExecutor, QueryExecutor};
 use nirv_engine::utils::{QueryResult, ColumnMetadata, DataType, Row, Value};
 use std::collections::HashMap;

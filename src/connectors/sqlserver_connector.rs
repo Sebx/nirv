@@ -237,6 +237,7 @@ impl SqlServerConnector {
     }
     
     /// Convert tiberius row value to internal Value representation
+    #[allow(dead_code)]
     fn convert_row_value(&self, row: &tiberius::Row, index: usize) -> NirvResult<Value> {
         // Try different types in order of likelihood
         if let Ok(Some(val)) = row.try_get::<&str, usize>(index) {

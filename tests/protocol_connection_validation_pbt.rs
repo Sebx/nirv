@@ -1,3 +1,5 @@
+#![allow(unused)]
+
 use nirv_engine::protocol::{ProtocolAdapter, ProtocolType, MySQLProtocolAdapter, SQLiteProtocolAdapter};
 use nirv_engine::protocol::postgres_protocol::PostgresProtocol;
 use nirv_engine::protocol::sqlserver_protocol::SqlServerProtocol;

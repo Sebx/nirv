@@ -324,6 +324,7 @@ impl Engine {
 
 /// Reference to engine components for use in async tasks
 #[derive(Clone)]
+#[allow(dead_code)]
 struct EngineRef {
     query_parser: Arc<dyn QueryParser>,
     query_planner: Arc<dyn QueryPlanner>,

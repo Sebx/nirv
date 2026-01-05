@@ -1,3 +1,5 @@
+#![allow(unused)]
+
 use nirv_engine::protocol::{ProtocolAdapter, PostgresProtocol, ProtocolType};
 use std::collections::HashMap;
 

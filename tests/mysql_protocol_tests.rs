@@ -1,3 +1,5 @@
+#![allow(unused)]
+
 use nirv_engine::protocol::{MySQLProtocolAdapter, ProtocolAdapter, ProtocolType, Connection, ProtocolQuery};
 use nirv_engine::utils::{QueryResult, ColumnMetadata, Row, Value, DataType};
 use tokio::net::{TcpListener, TcpStream};

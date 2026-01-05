@@ -281,6 +281,7 @@ mod tests {
             }
         }
         
+        #[allow(dead_code)]
         fn with_capabilities(mut self, capabilities: ConnectorTraitCapabilities) -> Self {
             self.capabilities = capabilities;
             self

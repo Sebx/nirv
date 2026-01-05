@@ -1,3 +1,5 @@
+#![allow(unused)]
+
 use nirv_engine::protocol::{ProtocolAdapter, SQLiteProtocolAdapter, ProtocolType};
 use std::collections::HashMap;
 use std::env;

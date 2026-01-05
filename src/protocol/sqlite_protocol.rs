@@ -7,18 +7,25 @@ use crate::protocol::{ProtocolAdapter, ProtocolType, Connection, Credentials, Pr
 use crate::utils::{NirvResult, ProtocolError, QueryResult, ColumnMetadata, Row, Value, DataType};
 
 /// SQLite connection flags
+#[allow(dead_code)]
 const SQLITE_OPEN_READONLY: u32 = 0x00000001;
 const SQLITE_OPEN_READWRITE: u32 = 0x00000002;
 const SQLITE_OPEN_CREATE: u32 = 0x00000004;
+#[allow(dead_code)]
 const SQLITE_OPEN_URI: u32 = 0x00000040;
 const SQLITE_OPEN_MEMORY: u32 = 0x00000080;
 
 /// SQLite result codes
 const SQLITE_OK: u32 = 0;
+#[allow(dead_code)]
 const SQLITE_ERROR: u32 = 1;
+#[allow(dead_code)]
 const SQLITE_BUSY: u32 = 5;
+#[allow(dead_code)]
 const SQLITE_NOMEM: u32 = 7;
+#[allow(dead_code)]
 const SQLITE_READONLY: u32 = 8;
+#[allow(dead_code)]
 const SQLITE_MISUSE: u32 = 21;
 
 /// SQLite data types
@@ -48,9 +55,13 @@ pub enum SQLiteCommand {
 /// SQLite clients through file-based connections and basic query execution.
 #[derive(Debug)]
 pub struct SQLiteProtocolAdapter {
+    #[allow(dead_code)]
     database_path: String,
+    #[allow(dead_code)]
     connection_flags: u32,
+    #[allow(dead_code)]
     prepared_statements: HashMap<u32, String>,
+    #[allow(dead_code)]
     next_statement_id: u32,
 }
 
@@ -121,6 +132,7 @@ impl SQLiteProtocolAdapter {
     }
     
     /// Create SQLite error response
+    #[allow(dead_code)]
     fn create_error_response(&self, error_code: u32, message: &str) -> Vec<u8> {
         let mut response = Vec::new();
         

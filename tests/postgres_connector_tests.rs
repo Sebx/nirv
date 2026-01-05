@@ -1,3 +1,5 @@
+#![allow(unused)]
+
 use nirv_engine::connectors::{Connector, ConnectorInitConfig, PostgresConnector};
 use nirv_engine::utils::{
     types::{ConnectorType, ConnectorQuery, QueryOperation, DataSource, InternalQuery, Value, DataType},
@@ -116,7 +118,8 @@ mod tests {
             match result {
                 Ok(query_result) => {
                     assert!(!query_result.columns.is_empty());
-                    assert!(query_result.execution_time.as_millis() >= 0);
+                    // Execution time is always >= 0 for u128, so just check it exists
+                    let _ = query_result.execution_time.as_millis();
                 }
                 Err(NirvError::Connector(ConnectorError::QueryExecutionFailed(_))) => {
                     // Query execution failed due to schema issues, but connection worked
@@ -364,7 +367,8 @@ mod tests {
                     assert!(!query_result.columns.is_empty());
                     // pg_database should have at least one database
                     assert!(!query_result.rows.is_empty());
-                    assert!(query_result.execution_time.as_millis() >= 0);
+                    // Execution time is always >= 0 for u128, so just check it exists
+                    let _ = query_result.execution_time.as_millis();
                 }
                 Err(NirvError::Connector(ConnectorError::QueryExecutionFailed(_))) => {
                     // Query execution failed - acceptable for this test environment
@@ -565,7 +569,8 @@ mod integration_tests {
             match result {
                 Ok(query_result) => {
                     assert!(!query_result.columns.is_empty());
-                    assert!(query_result.execution_time.as_millis() >= 0);
+                    // Execution time is always >= 0 for u128, so just check it exists
+                    let _ = query_result.execution_time.as_millis();
                 }
                 Err(NirvError::Connector(ConnectorError::QueryExecutionFailed(_))) => {
                     // Query execution failed due to schema issues, but connection worked

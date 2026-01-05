@@ -1,3 +1,5 @@
+#![allow(unused)]
+
 use nirv_engine::{
     Engine, EngineBuilder,
     DefaultQueryParser, DefaultQueryPlanner, DefaultQueryExecutor, DefaultDispatcher,

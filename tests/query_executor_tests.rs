@@ -1,3 +1,5 @@
+#![allow(unused)]
+
 use nirv_engine::{
     engine::{QueryExecutor, ExecutionPlan, PlanNode, DefaultQueryExecutor},
     connectors::{MockConnector, ConnectorRegistry, Connector, ConnectorInitConfig},

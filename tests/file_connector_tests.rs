@@ -1,3 +1,5 @@
+#![allow(unused)]
+
 use nirv_engine::connectors::{Connector, ConnectorInitConfig, FileConnector};
 use nirv_engine::utils::{
     types::{ConnectorType, ConnectorQuery, QueryOperation, DataSource, InternalQuery, Value, DataType, Predicate, PredicateOperator, PredicateValue},

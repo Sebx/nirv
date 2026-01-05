@@ -210,6 +210,7 @@ impl PostgresProtocol {
     }
     
     /// Create an error response message
+    #[allow(dead_code)]
     fn create_error_response(&self, message: &str) -> Vec<u8> {
         let mut response = Vec::new();
         response.push(b'E'); // Error response

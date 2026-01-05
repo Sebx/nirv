@@ -1,3 +1,5 @@
+#![allow(unused)]
+
 use nirv_engine::connectors::{
     SqlServerConnector, Connector, ConnectorInitConfig
 };
@@ -159,7 +161,8 @@ async fn test_sqlserver_connector_connection_with_service_container() {
         match result {
             Ok(query_result) => {
                 assert!(!query_result.columns.is_empty());
-                assert!(query_result.execution_time.as_millis() >= 0);
+                // Execution time is always >= 0 for u128, so just check it exists
+                let _ = query_result.execution_time.as_millis();
             }
             Err(NirvError::Connector(ConnectorError::QueryExecutionFailed(_))) => {
                 // Query execution failed due to schema issues, but connection worked
@@ -404,7 +407,8 @@ mod integration_tests {
             match result {
                 Ok(query_result) => {
                     assert!(!query_result.columns.is_empty());
-                    assert!(query_result.execution_time.as_millis() >= 0);
+                    // Execution time is always >= 0 for u128, so just check it exists
+                    let _ = query_result.execution_time.as_millis();
                 }
                 Err(NirvError::Connector(ConnectorError::QueryExecutionFailed(_))) => {
                     // Query execution failed due to schema issues, but connection worked

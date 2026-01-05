@@ -25,6 +25,7 @@ pub struct DefaultQueryParser {
     mysql_dialect: MySqlDialect,
     sqlite_dialect: SQLiteDialect,
     generic_dialect: GenericDialect,
+    #[allow(dead_code)]
     source_regex: Regex,
 }
 
@@ -265,6 +266,7 @@ impl DefaultQueryParser {
     }
 
     /// Extract source specification from source() function
+    #[allow(dead_code)]
     fn extract_source_function(&self, table_name: &str) -> NirvResult<Option<(String, String)>> {
         if let Some(captures) = self.source_regex.captures(table_name) {
             if let Some(source_spec) = captures.get(1) {
@@ -492,7 +494,7 @@ impl QueryParser for DefaultQueryParser {
 (test)]
 mod tests {
     use super::*;
-    use crate::utils::{QueryOperation, DataSource, Column, Predicate, PredicateOperator, PredicateValue, OrderDirection};
+    use crate::utils::{QueryOperation, OrderDirection};
 
     fn create_parser() -> DefaultQueryParser {
         DefaultQueryParser::new().expect("Failed to create parser")

@@ -1,3 +1,5 @@
+#![allow(unused)]
+
 use tokio::net::{TcpListener, TcpStream};
 
 use nirv_engine::protocol::{

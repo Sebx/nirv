@@ -15,7 +15,7 @@
 //!
 //! ## Quick Start
 //!
-//! ```rust
+//! ```rust,no_run
 //! use nirv_engine::connectors::{SqlServerConnector, Connector, ConnectorInitConfig};
 //! use nirv_engine::protocol::{SqlServerProtocol, ProtocolAdapter};
 //!
@@ -64,8 +64,8 @@
 //! - Schema introspection via INFORMATION_SCHEMA
 //! - Transaction support for ACID compliance
 //!
-//! ```rust
-//! use nirv_engine::protocol::{SqlServerProtocol, Connection, Credentials, ProtocolType};
+//! ```rust,no_run
+//! use nirv_engine::protocol::{SqlServerProtocol, Connection, Credentials, ProtocolType, ProtocolAdapter};
 //! use tokio::net::TcpStream;
 //!
 //! # async fn example() -> Result<(), Box<dyn std::error::Error>> {

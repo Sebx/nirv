@@ -8,6 +8,7 @@ use crate::utils::error::NirvResult;
 /// Main CLI runner that handles command execution
 pub struct CliRunner {
     query_parser: DefaultQueryParser,
+    #[allow(dead_code)]
     query_executor: DefaultQueryExecutor,
     dispatcher: DefaultDispatcher,
 }

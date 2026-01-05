@@ -166,6 +166,7 @@ impl DefaultQueryExecutor {
     }
     
     /// Aggregate results from multiple operations
+    #[allow(dead_code)]
     fn aggregate_results(&self, results: Vec<QueryResult>) -> NirvResult<QueryResult> {
         if results.is_empty() {
             return Ok(QueryResult::new());
@@ -270,8 +271,8 @@ mod tests {
     use super::*;
     use crate::{
         engine::{ExecutionPlan, PlanNode},
-        connectors::{MockConnector, ConnectorRegistry},
-        utils::types::{DataSource, Column, Predicate, PredicateOperator, PredicateValue, OrderBy, OrderColumn, OrderDirection, Row},
+        connectors::{ConnectorRegistry},
+        utils::types::{DataSource, OrderBy, OrderColumn, OrderDirection, Row},
     };
 
     #[test]

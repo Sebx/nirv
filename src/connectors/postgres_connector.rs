@@ -292,6 +292,11 @@ impl Connector for PostgresConnector {
         let max_size = config.max_connections.unwrap_or(10) as usize;
         let timeout = Duration::from_secs(config.timeout_seconds.unwrap_or(30));
         
+        // Clone values for error messages before moving them
+        let host_clone = host.clone();
+        let user_clone = user.clone();
+        let dbname_clone = dbname.clone();
+        
         // Create deadpool configuration
         let mut pg_config = Config::new();
         pg_config.host = Some(host);
@@ -309,11 +314,11 @@ impl Connector for PostgresConnector {
         let _client = tokio::time::timeout(timeout, pool.get()).await
             .map_err(|_| ConnectorError::Timeout(format!(
                 "Connection timeout after {}s when connecting to PostgreSQL at {}:{}",
-                timeout.as_secs(), host, port
+                timeout.as_secs(), host_clone, port
             )))?
             .map_err(|e| ConnectorError::ConnectionFailed(format!(
                 "Failed to establish connection to PostgreSQL at {}:{} using username '{}' - Error: {} (Check if server is running, credentials are correct, and database '{}' exists)",
-                host, port, user, e, dbname
+                host_clone, port, user_clone, e, dbname_clone
             )))?;
         
         self.pool = Some(pool);

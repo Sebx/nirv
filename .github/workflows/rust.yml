@@ -1,4 +1,4 @@
-name: Rust
+name: Rust CI/CD Pipeline
 
 on:
   push:
@@ -8,32 +8,1067 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  # Performance monitoring thresholds (in minutes)
+  MAX_PREPARE_TIME: 5
+  MAX_QUALITY_TIME: 10
+  MAX_TEST_TIME: 15
+  MAX_TOTAL_PIPELINE_TIME: 25
 
 jobs:
-  build:
+  # Preparation job for dependency caching and toolchain setup
+  prepare:
+    name: Prepare Environment
     runs-on: ubuntu-latest
-
+    outputs:
+      cache-key: ${{ steps.cache-key.outputs.key }}
+      prepare-start-time: ${{ steps.timing.outputs.start-time }}
     steps:
-    - uses: actions/checkout@v4
-    
-    - name: Install Rust toolchain
-      uses: actions-rust-lang/setup-rust-toolchain@v1
-      with:
-        toolchain: stable
-    
-    - name: Build
-      run: cargo build --verbose
-    
-    - name: Run tests
-      run: cargo test --verbose
-    
-    - name: Run SQL Server tests (critical)
-      run: cargo test sqlserver --verbose
-    
-    - name: Check code formatting
-      run: cargo fmt --check
-      continue-on-error: true
-    
-    - name: Run clippy
-      run: cargo clippy --all-targets --all-features -- -D warnings
-      continue-on-error: true  # Allow clippy warnings for now
+      - name: Record job start time
+        id: timing
+        run: |
+          echo "start-time=$(date +%s)" >> $GITHUB_OUTPUT
+          echo "Job started at: $(date)"
+      
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Generate cache key
+        id: cache-key
+        run: |
+          echo "key=cargo-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}" >> $GITHUB_OUTPUT
+      
+      - name: Install Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+      
+      # Multi-level caching strategy for optimal performance
+      - name: Cache Cargo registry
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: cargo-registry-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            cargo-registry-${{ runner.os }}-
+      
+      - name: Cache Cargo binaries
+        uses: actions/cache@v3
+        with:
+          path: ~/.cargo/bin/
+          key: cargo-bin-${{ runner.os }}-${{ hashFiles('**/Cargo.toml') }}
+          restore-keys: |
+            cargo-bin-${{ runner.os }}-
+      
+      - name: Cache build artifacts
+        uses: actions/cache@v3
+        with:
+          path: target/
+          key: cargo-build-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}-${{ hashFiles('src/**/*.rs') }}
+          restore-keys: |
+            cargo-build-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}-
+            cargo-build-${{ runner.os }}-
+      
+      - name: Validate cache effectiveness
+        run: |
+          echo "=== Cache Validation Report ==="
+          
+          # Initialize cache metrics
+          cache_hits=0
+          cache_misses=0
+          total_cache_size=0
+          
+          # Check if registry cache was restored
+          if [ -d ~/.cargo/registry/cache ] && [ "$(ls -A ~/.cargo/registry/cache)" ]; then
+            echo "✅ Cargo registry cache restored successfully"
+            registry_size=$(du -sb ~/.cargo/registry/cache | cut -f1)
+            echo "Registry cache size: $(du -sh ~/.cargo/registry/cache | cut -f1)"
+            cache_hits=$((cache_hits + 1))
+            total_cache_size=$((total_cache_size + registry_size))
+          else
+            echo "❌ Cargo registry cache not found - will be created"
+            cache_misses=$((cache_misses + 1))
+          fi
+          
+          # Check if build cache was restored
+          if [ -d target ] && [ "$(ls -A target)" ]; then
+            echo "✅ Build artifacts cache restored successfully"
+            build_size=$(du -sb target | cut -f1)
+            echo "Build cache size: $(du -sh target | cut -f1)"
+            cache_hits=$((cache_hits + 1))
+            total_cache_size=$((total_cache_size + build_size))
+          else
+            echo "❌ Build artifacts cache not found - will be created"
+            cache_misses=$((cache_misses + 1))
+          fi
+          
+          # Check if binary cache was restored
+          if [ -d ~/.cargo/bin ] && [ "$(ls -A ~/.cargo/bin)" ]; then
+            echo "✅ Cargo binaries cache restored successfully"
+            bin_size=$(du -sb ~/.cargo/bin | cut -f1)
+            echo "Binary cache size: $(du -sh ~/.cargo/bin | cut -f1)"
+            cache_hits=$((cache_hits + 1))
+            total_cache_size=$((total_cache_size + bin_size))
+          else
+            echo "❌ Cargo binaries cache not found - will be created"
+            cache_misses=$((cache_misses + 1))
+          fi
+          
+          # Calculate cache effectiveness metrics
+          total_caches=3
+          cache_hit_rate=$((cache_hits * 100 / total_caches))
+          
+          echo ""
+          echo "=== Cache Performance Metrics ==="
+          echo "Cache hits: $cache_hits/$total_caches"
+          echo "Cache misses: $cache_misses/$total_caches"
+          echo "Cache hit rate: ${cache_hit_rate}%"
+          echo "Total cache size: $(echo $total_cache_size | awk '{printf "%.2f MB", $1/1024/1024}')"
+          
+          # Store metrics for later analysis
+          echo "CACHE_HIT_RATE=${cache_hit_rate}" >> $GITHUB_ENV
+          echo "CACHE_HITS=${cache_hits}" >> $GITHUB_ENV
+          echo "CACHE_MISSES=${cache_misses}" >> $GITHUB_ENV
+          echo "TOTAL_CACHE_SIZE=${total_cache_size}" >> $GITHUB_ENV
+          
+          # Validate cache effectiveness threshold
+          if [ $cache_hit_rate -lt 50 ]; then
+            echo "⚠️  WARNING: Cache hit rate below 50% - consider cache optimization"
+          elif [ $cache_hit_rate -ge 80 ]; then
+            echo "🎉 EXCELLENT: Cache hit rate above 80% - optimal performance"
+          else
+            echo "✅ GOOD: Cache hit rate acceptable"
+          fi
+      
+      - name: Build dependencies
+        run: cargo build --verbose
+      
+      - name: Cache invalidation monitoring
+        run: |
+          echo "=== Cache Invalidation Analysis ==="
+          
+          # Check for dependency changes that should invalidate caches
+          if [ -f ~/.cargo/.last_cargo_lock_hash ]; then
+            last_hash=$(cat ~/.cargo/.last_cargo_lock_hash)
+            current_hash=$(sha256sum Cargo.lock | cut -d' ' -f1)
+            
+            if [ "$last_hash" != "$current_hash" ]; then
+              echo "🔄 Cargo.lock changed - dependency cache invalidation triggered"
+              echo "Previous hash: $last_hash"
+              echo "Current hash: $current_hash"
+              
+              # Clear potentially stale build artifacts
+              if [ -d target/debug ]; then
+                echo "Clearing debug build artifacts due to dependency changes"
+                rm -rf target/debug/deps target/debug/build
+              fi
+            else
+              echo "✅ Cargo.lock unchanged - dependency cache valid"
+            fi
+          else
+            echo "📝 First run - establishing cache baseline"
+          fi
+          
+          # Store current hash for next run
+          mkdir -p ~/.cargo
+          sha256sum Cargo.lock | cut -d' ' -f1 > ~/.cargo/.last_cargo_lock_hash
+          
+          # Check for source code changes that should invalidate build cache
+          if [ -f ~/.cargo/.last_source_hash ]; then
+            last_source_hash=$(cat ~/.cargo/.last_source_hash)
+            current_source_hash=$(find src -name "*.rs" -type f -exec sha256sum {} \; | sort | sha256sum | cut -d' ' -f1)
+            
+            if [ "$last_source_hash" != "$current_source_hash" ]; then
+              echo "🔄 Source code changed - build cache partially invalidated"
+              echo "Previous source hash: $last_source_hash"
+              echo "Current source hash: $current_source_hash"
+            else
+              echo "✅ Source code unchanged - build cache valid"
+            fi
+          else
+            echo "📝 First run - establishing source cache baseline"
+          fi
+          
+          # Store current source hash for next run
+          find src -name "*.rs" -type f -exec sha256sum {} \; | sort | sha256sum | cut -d' ' -f1 > ~/.cargo/.last_source_hash
+      
+      - name: Check preparation time threshold
+        run: |
+          start_time=${{ steps.timing.outputs.start-time }}
+          end_time=$(date +%s)
+          duration=$((end_time - start_time))
+          duration_minutes=$((duration / 60))
+          
+          echo "Preparation job duration: ${duration_minutes} minutes (${duration} seconds)"
+          
+          if [ $duration_minutes -gt $MAX_PREPARE_TIME ]; then
+            echo "WARNING: Preparation job exceeded threshold of $MAX_PREPARE_TIME minutes"
+            echo "Consider optimizing dependency caching or build process"
+          else
+            echo "Preparation job completed within acceptable time"
+          fi
+
+  # Code quality checks job with optimized parallelization
+  quality:
+    name: Code Quality Checks
+    runs-on: ubuntu-latest
+    needs: prepare
+    outputs:
+      quality-start-time: ${{ steps.timing.outputs.start-time }}
+    strategy:
+      fail-fast: false  # Allow other checks to continue if one fails for better feedback
+      max-parallel: 6   # Optimize resource usage - run up to 6 checks simultaneously
+      matrix:
+        check: [format, clippy, build, security, docs, coverage]
+        include:
+          # Assign different resource priorities to balance load
+          - check: format
+            priority: high
+            timeout-minutes: 5
+          - check: clippy
+            priority: medium
+            timeout-minutes: 10
+          - check: build
+            priority: low
+            timeout-minutes: 15
+          - check: security
+            priority: high
+            timeout-minutes: 8
+          - check: docs
+            priority: medium
+            timeout-minutes: 10
+          - check: coverage
+            priority: low
+            timeout-minutes: 20
+    steps:
+      - name: Record job start time
+        id: timing
+        run: |
+          echo "start-time=$(date +%s)" >> $GITHUB_OUTPUT
+          echo "Quality check '${{ matrix.check }}' started at: $(date)"
+      
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Install Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+      
+      - name: Restore Cargo registry cache
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: cargo-registry-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            cargo-registry-${{ runner.os }}-
+      
+      - name: Restore Cargo binaries cache
+        uses: actions/cache@v3
+        with:
+          path: ~/.cargo/bin/
+          key: cargo-bin-${{ runner.os }}-${{ hashFiles('**/Cargo.toml') }}
+          restore-keys: |
+            cargo-bin-${{ runner.os }}-
+      
+      - name: Restore build artifacts cache
+        uses: actions/cache@v3
+        with:
+          path: target/
+          key: cargo-build-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}-${{ hashFiles('src/**/*.rs') }}
+          restore-keys: |
+            cargo-build-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}-
+            cargo-build-${{ runner.os }}-
+      
+      - name: Validate cache restoration effectiveness
+        run: |
+          echo "=== Cache Restoration Validation for ${{ matrix.check }} ==="
+          
+          # Measure cache effectiveness by timing operations
+          cache_effective=true
+          
+          # Check registry cache effectiveness
+          if [ ! -d ~/.cargo/registry/cache ] || [ -z "$(ls -A ~/.cargo/registry/cache 2>/dev/null)" ]; then
+            echo "⚠️  Registry cache miss detected for ${{ matrix.check }}"
+            cache_effective=false
+          fi
+          
+          # Check build cache effectiveness
+          if [ ! -d target ] || [ -z "$(ls -A target 2>/dev/null)" ]; then
+            echo "⚠️  Build cache miss detected for ${{ matrix.check }}"
+            cache_effective=false
+          fi
+          
+          if [ "$cache_effective" = true ]; then
+            echo "✅ Cache restoration effective for ${{ matrix.check }}"
+            echo "CACHE_EFFECTIVE=true" >> $GITHUB_ENV
+          else
+            echo "❌ Cache restoration ineffective for ${{ matrix.check }}"
+            echo "CACHE_EFFECTIVE=false" >> $GITHUB_ENV
+          fi
+      
+      - name: Run format check
+        if: matrix.check == 'format'
+        run: |
+          echo "Running strict format check..."
+          start_time=$(date +%s)
+          
+          # Run cargo fmt --check with strict enforcement
+          if ! cargo fmt --check --verbose; then
+            echo ""
+            echo "❌ FORMATTING VIOLATION DETECTED"
+            echo "Code formatting does not comply with rustfmt standards."
+            echo ""
+            echo "To fix formatting issues, run:"
+            echo "  cargo fmt"
+            echo ""
+            echo "All code must be properly formatted before merging."
+            exit 1
+          fi
+          
+          end_time=$(date +%s)
+          duration=$((end_time - start_time))
+          echo "✅ Format check passed in ${duration} seconds"
+      
+      - name: Run clippy
+        if: matrix.check == 'clippy'
+        run: |
+          echo "Running strict clippy analysis..."
+          start_time=$(date +%s)
+          
+          # Run clippy with strict enforcement - treat all warnings as errors
+          if ! cargo clippy --all-targets --all-features --verbose -- -D warnings -D clippy::all -D clippy::pedantic; then
+            echo ""
+            echo "❌ CLIPPY VIOLATIONS DETECTED"
+            echo "Code contains clippy warnings that must be resolved."
+            echo ""
+            echo "Clippy is configured to treat warnings as errors for strict code quality."
+            echo "Please fix all clippy warnings before merging."
+            echo ""
+            echo "To see detailed clippy output, run:"
+            echo "  cargo clippy --all-targets --all-features -- -D warnings"
+            echo ""
+            exit 1
+          fi
+          
+          end_time=$(date +%s)
+          duration=$((end_time - start_time))
+          echo "✅ Clippy analysis passed in ${duration} seconds"
+      
+      - name: Build project
+        if: matrix.check == 'build'
+        run: |
+          echo "Building project..."
+          start_time=$(date +%s)
+          cargo build --verbose
+          end_time=$(date +%s)
+          duration=$((end_time - start_time))
+          echo "Build completed in ${duration} seconds"
+      
+      - name: Run security audit
+        if: matrix.check == 'security'
+        run: |
+          echo "Running security audit..."
+          start_time=$(date +%s)
+          
+          # Install cargo-audit if not already cached
+          if ! command -v cargo-audit &> /dev/null; then
+            echo "Installing cargo-audit..."
+            cargo install cargo-audit
+          else
+            echo "cargo-audit already available"
+          fi
+          
+          # Update advisory database
+          echo "Updating advisory database..."
+          cargo audit --update
+          
+          # Run security audit with strict enforcement
+          echo "Scanning for security vulnerabilities..."
+          if ! cargo audit --deny warnings --deny unmaintained --deny unsound --deny yanked; then
+            echo ""
+            echo "❌ SECURITY VULNERABILITIES DETECTED"
+            echo "Dependencies contain known security vulnerabilities that must be resolved."
+            echo ""
+            echo "Security audit failed with the following policy:"
+            echo "- Warnings: Denied (treat as errors)"
+            echo "- Unmaintained crates: Denied"
+            echo "- Unsound crates: Denied" 
+            echo "- Yanked crates: Denied"
+            echo ""
+            echo "Please update vulnerable dependencies or add security advisories"
+            echo "to .cargo/audit.toml if the vulnerabilities are not applicable."
+            echo ""
+            echo "For more information, run:"
+            echo "  cargo audit"
+            echo ""
+            exit 1
+          fi
+          
+          end_time=$(date +%s)
+          duration=$((end_time - start_time))
+          echo "✅ Security audit passed in ${duration} seconds"
+      
+      - name: Run documentation validation
+        if: matrix.check == 'docs'
+        run: |
+          echo "Running documentation validation..."
+          start_time=$(date +%s)
+          
+          # Check for missing documentation with strict enforcement
+          echo "Checking for missing documentation..."
+          if ! cargo doc --no-deps --document-private-items --all-features 2>&1 | tee doc_output.log; then
+            echo ""
+            echo "❌ DOCUMENTATION BUILD FAILED"
+            echo "Documentation generation failed. Please fix documentation errors."
+            echo ""
+            cat doc_output.log
+            exit 1
+          fi
+          
+          # Check for missing documentation warnings
+          echo "Analyzing documentation coverage..."
+          
+          # Run rustdoc with missing-docs lint to detect undocumented items
+          export RUSTDOCFLAGS="-D missing_docs -D rustdoc::broken_intra_doc_links"
+          
+          if ! cargo doc --no-deps --all-features 2>&1 | tee doc_coverage.log; then
+            echo ""
+            echo "❌ DOCUMENTATION COVERAGE INSUFFICIENT"
+            echo "Missing documentation detected for public API items."
+            echo ""
+            echo "Documentation policy requires:"
+            echo "- All public functions must be documented"
+            echo "- All public structs and enums must be documented"
+            echo "- All public modules must be documented"
+            echo "- No broken intra-doc links allowed"
+            echo ""
+            echo "Documentation errors:"
+            cat doc_coverage.log
+            echo ""
+            echo "Please add documentation for all public API items."
+            exit 1
+          fi
+          
+          # Generate documentation coverage report
+          echo "Generating documentation coverage report..."
+          
+          # Count documented vs undocumented items (basic heuristic)
+          total_pub_items=$(grep -r "pub " src/ --include="*.rs" | grep -E "(pub fn|pub struct|pub enum|pub mod|pub trait)" | wc -l)
+          doc_comments=$(grep -r "///" src/ --include="*.rs" | wc -l)
+          
+          if [ "$total_pub_items" -gt 0 ]; then
+            coverage_percent=$((doc_comments * 100 / total_pub_items))
+            echo "Documentation coverage estimate: ${coverage_percent}% (${doc_comments} doc comments for ${total_pub_items} public items)"
+            
+            # Set minimum documentation coverage threshold
+            min_coverage=80
+            if [ "$coverage_percent" -lt "$min_coverage" ]; then
+              echo ""
+              echo "⚠️  WARNING: Documentation coverage (${coverage_percent}%) below recommended threshold (${min_coverage}%)"
+              echo "Consider adding more comprehensive documentation."
+            else
+              echo "✅ Documentation coverage meets recommended threshold"
+            fi
+          else
+            echo "No public items found for documentation analysis"
+          fi
+          
+          end_time=$(date +%s)
+          duration=$((end_time - start_time))
+          echo "✅ Documentation validation completed in ${duration} seconds"
+      
+      - name: Run code coverage enforcement
+        if: matrix.check == 'coverage'
+        run: |
+          echo "Running code coverage analysis..."
+          start_time=$(date +%s)
+          
+          # Install cargo-tarpaulin if not already cached
+          if ! command -v cargo-tarpaulin &> /dev/null; then
+            echo "Installing cargo-tarpaulin..."
+            cargo install cargo-tarpaulin
+          else
+            echo "cargo-tarpaulin already available"
+          fi
+          
+          # Set coverage thresholds
+          MIN_COVERAGE=70  # Minimum acceptable coverage percentage
+          TARGET_COVERAGE=85  # Target coverage percentage
+          
+          echo "Coverage policy:"
+          echo "- Minimum coverage threshold: ${MIN_COVERAGE}%"
+          echo "- Target coverage threshold: ${TARGET_COVERAGE}%"
+          echo ""
+          
+          # Run tarpaulin with comprehensive coverage analysis
+          echo "Generating code coverage report..."
+          if ! cargo tarpaulin \
+            --verbose \
+            --all-features \
+            --workspace \
+            --timeout 120 \
+            --exclude-files "tests/*" \
+            --exclude-files "examples/*" \
+            --out xml \
+            --out html \
+            --output-dir coverage/ \
+            2>&1 | tee coverage_output.log; then
+            echo ""
+            echo "❌ COVERAGE ANALYSIS FAILED"
+            echo "Code coverage analysis could not be completed."
+            echo ""
+            cat coverage_output.log
+            exit 1
+          fi
+          
+          # Extract coverage percentage from tarpaulin output
+          coverage_line=$(grep -E "^[0-9]+\.[0-9]+% coverage" coverage_output.log | tail -1)
+          if [ -n "$coverage_line" ]; then
+            coverage_percent=$(echo "$coverage_line" | grep -oE "[0-9]+\.[0-9]+" | head -1)
+            coverage_int=$(echo "$coverage_percent" | cut -d. -f1)
+            
+            echo ""
+            echo "=== Code Coverage Report ==="
+            echo "Current coverage: ${coverage_percent}%"
+            echo "Minimum threshold: ${MIN_COVERAGE}%"
+            echo "Target threshold: ${TARGET_COVERAGE}%"
+            echo ""
+            
+            # Check against minimum threshold
+            if [ "$coverage_int" -lt "$MIN_COVERAGE" ]; then
+              echo "❌ COVERAGE BELOW MINIMUM THRESHOLD"
+              echo "Code coverage (${coverage_percent}%) is below the minimum required threshold (${MIN_COVERAGE}%)."
+              echo ""
+              echo "Coverage enforcement policy requires:"
+              echo "- All new code must include appropriate tests"
+              echo "- Critical functionality must be thoroughly tested"
+              echo "- Coverage must not decrease below minimum threshold"
+              echo ""
+              echo "Please add tests to improve coverage before merging."
+              echo "Coverage report available in coverage/tarpaulin-report.html"
+              exit 1
+            elif [ "$coverage_int" -lt "$TARGET_COVERAGE" ]; then
+              echo "⚠️  COVERAGE BELOW TARGET"
+              echo "Code coverage (${coverage_percent}%) meets minimum requirements but is below target (${TARGET_COVERAGE}%)."
+              echo "Consider adding more comprehensive tests to reach target coverage."
+            else
+              echo "✅ EXCELLENT COVERAGE"
+              echo "Code coverage (${coverage_percent}%) exceeds target threshold."
+            fi
+            
+            # Generate detailed coverage summary
+            echo ""
+            echo "=== Coverage Summary ==="
+            
+            # Extract additional metrics if available
+            if grep -q "lines covered" coverage_output.log; then
+              lines_info=$(grep "lines covered" coverage_output.log | tail -1)
+              echo "Lines: $lines_info"
+            fi
+            
+            if grep -q "branches covered" coverage_output.log; then
+              branches_info=$(grep "branches covered" coverage_output.log | tail -1)
+              echo "Branches: $branches_info"
+            fi
+            
+            echo "Detailed report: coverage/tarpaulin-report.html"
+            echo "XML report: coverage/cobertura.xml"
+            
+          else
+            echo "⚠️  Could not extract coverage percentage from output"
+            echo "Coverage analysis may have completed with warnings"
+            cat coverage_output.log
+          fi
+          
+          end_time=$(date +%s)
+          duration=$((end_time - start_time))
+          echo "✅ Code coverage analysis completed in ${duration} seconds"
+      
+      - name: Check quality job time threshold
+        run: |
+          start_time=${{ steps.timing.outputs.start-time }}
+          end_time=$(date +%s)
+          duration=$((end_time - start_time))
+          duration_minutes=$((duration / 60))
+          
+          echo "Quality check '${{ matrix.check }}' duration: ${duration_minutes} minutes (${duration} seconds)"
+          
+          if [ $duration_minutes -gt $MAX_QUALITY_TIME ]; then
+            echo "WARNING: Quality check '${{ matrix.check }}' exceeded threshold of $MAX_QUALITY_TIME minutes"
+            echo "Consider optimizing the quality check process"
+          else
+            echo "Quality check completed within acceptable time"
+          fi
+
+  # Parallel test execution job with optimized resource allocation
+  test:
+    name: Test Suite
+    runs-on: ubuntu-latest
+    needs: [prepare, quality]  # Depend on quality checks passing
+    strategy:
+      fail-fast: false  # Allow other test suites to continue for comprehensive feedback
+      max-parallel: 2   # Limit parallel jobs to prevent resource contention with database services
+      matrix:
+        test-suite: [unit, integration, sqlserver, protocol]
+        include:
+          # Optimize resource allocation based on test complexity
+          - test-suite: unit
+            timeout-minutes: 10
+            services-needed: false
+            resource-priority: high
+          - test-suite: integration
+            timeout-minutes: 15
+            services-needed: true
+            resource-priority: medium
+          - test-suite: sqlserver
+            timeout-minutes: 20
+            services-needed: true
+            resource-priority: low
+          - test-suite: protocol
+            timeout-minutes: 15
+            services-needed: true
+            resource-priority: medium
+    services:
+      # Conditionally provision services based on test suite needs
+      sqlserver:
+        image: ${{ (matrix.test-suite == 'sqlserver' || matrix.test-suite == 'integration') && 'mcr.microsoft.com/mssql/server:2022-latest' || '' }}
+        env:
+          ACCEPT_EULA: Y
+          SA_PASSWORD: YourStrong@Passw0rd
+          MSSQL_PID: Developer
+        ports:
+          - 1433:1433
+        options: >-
+          --health-cmd "/opt/mssql-tools/bin/sqlcmd -S localhost -U sa -P YourStrong@Passw0rd -Q 'SELECT 1' || exit 1"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+          --health-start-period 10s
+      postgres:
+        image: ${{ (matrix.test-suite == 'integration' || matrix.test-suite == 'protocol') && 'postgres:15' || '' }}
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_USER: postgres
+          POSTGRES_DB: testdb
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      mysql:
+        image: ${{ (matrix.test-suite == 'protocol' || matrix.test-suite == 'integration') && 'mysql:8.0' || '' }}
+        env:
+          MYSQL_ROOT_PASSWORD: rootpassword
+          MYSQL_DATABASE: testdb
+          MYSQL_USER: testuser
+          MYSQL_PASSWORD: testpassword
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd "mysqladmin ping -h localhost"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - name: Record job start time
+        id: timing
+        run: |
+          echo "start-time=$(date +%s)" >> $GITHUB_OUTPUT
+          echo "Test suite '${{ matrix.test-suite }}' started at: $(date)"
+          echo "Resource priority: ${{ matrix.resource-priority }}"
+          echo "Timeout: ${{ matrix.timeout-minutes }} minutes"
+      
+      - name: Monitor resource allocation
+        run: |
+          echo "=== Resource Monitoring for ${{ matrix.test-suite }} ==="
+          echo "Available CPU cores: $(nproc)"
+          echo "Available memory: $(free -h | grep '^Mem:' | awk '{print $2}')"
+          echo "Disk space: $(df -h / | tail -1 | awk '{print $4}')"
+          
+          # Set resource limits based on priority
+          case "${{ matrix.resource-priority }}" in
+            "high")
+              echo "Setting high priority resource allocation"
+              echo "CARGO_BUILD_JOBS=$(nproc)" >> $GITHUB_ENV
+              ;;
+            "medium")
+              echo "Setting medium priority resource allocation"
+              echo "CARGO_BUILD_JOBS=$(($(nproc) / 2))" >> $GITHUB_ENV
+              ;;
+            "low")
+              echo "Setting low priority resource allocation"
+              echo "CARGO_BUILD_JOBS=1" >> $GITHUB_ENV
+              ;;
+          esac
+      
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Install Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+      
+      - name: Restore Cargo registry cache
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: cargo-registry-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            cargo-registry-${{ runner.os }}-
+      
+      - name: Restore Cargo binaries cache
+        uses: actions/cache@v3
+        with:
+          path: ~/.cargo/bin/
+          key: cargo-bin-${{ runner.os }}-${{ hashFiles('**/Cargo.toml') }}
+          restore-keys: |
+            cargo-bin-${{ runner.os }}-
+      
+      - name: Restore build artifacts cache
+        uses: actions/cache@v3
+        with:
+          path: target/
+          key: cargo-build-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}-${{ hashFiles('src/**/*.rs') }}
+          restore-keys: |
+            cargo-build-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}-
+            cargo-build-${{ runner.os }}-
+      
+      - name: Monitor cache effectiveness for tests
+        run: |
+          echo "=== Cache Effectiveness Monitoring for ${{ matrix.test-suite }} ==="
+          
+          # Track cache performance metrics
+          start_time=$(date +%s)
+          
+          # Validate cache state
+          registry_cached=false
+          build_cached=false
+          
+          if [ -d ~/.cargo/registry/cache ] && [ "$(ls -A ~/.cargo/registry/cache)" ]; then
+            registry_cached=true
+            echo "✅ Registry cache available for ${{ matrix.test-suite }}"
+          else
+            echo "❌ Registry cache unavailable for ${{ matrix.test-suite }}"
+          fi
+          
+          if [ -d target ] && [ "$(ls -A target)" ]; then
+            build_cached=true
+            echo "✅ Build cache available for ${{ matrix.test-suite }}"
+          else
+            echo "❌ Build cache unavailable for ${{ matrix.test-suite }}"
+          fi
+          
+          # Calculate cache score
+          cache_score=0
+          if [ "$registry_cached" = true ]; then cache_score=$((cache_score + 50)); fi
+          if [ "$build_cached" = true ]; then cache_score=$((cache_score + 50)); fi
+          
+          echo "Cache effectiveness score: ${cache_score}% for ${{ matrix.test-suite }}"
+          echo "CACHE_SCORE=${cache_score}" >> $GITHUB_ENV
+          
+          end_time=$(date +%s)
+          validation_duration=$((end_time - start_time))
+          echo "Cache validation completed in ${validation_duration} seconds"
+      
+      # Fast-fail validation: Check critical services are ready before running tests
+      - name: Validate database services readiness
+        if: matrix.test-suite == 'sqlserver' || matrix.test-suite == 'integration' || matrix.test-suite == 'protocol'
+        run: |
+          echo "Validating database services are ready..."
+          
+          # Check SQL Server if needed
+          if [[ "${{ matrix.test-suite }}" == "sqlserver" ]]; then
+            echo "Checking SQL Server readiness..."
+            timeout 30s bash -c 'until nc -z localhost 1433; do sleep 1; done' || {
+              echo "CRITICAL: SQL Server service failed to start within 30 seconds"
+              exit 1
+            }
+            echo "SQL Server is ready"
+          fi
+          
+          # Check PostgreSQL if needed
+          if [[ "${{ matrix.test-suite }}" == "integration" ]]; then
+            echo "Checking PostgreSQL readiness..."
+            timeout 30s bash -c 'until nc -z localhost 5432; do sleep 1; done' || {
+              echo "CRITICAL: PostgreSQL service failed to start within 30 seconds"
+              exit 1
+            }
+            echo "PostgreSQL is ready"
+          fi
+          
+          # Check MySQL if needed
+          if [[ "${{ matrix.test-suite }}" == "protocol" ]]; then
+            echo "Checking MySQL readiness..."
+            timeout 30s bash -c 'until nc -z localhost 3306; do sleep 1; done' || {
+              echo "CRITICAL: MySQL service failed to start within 30 seconds"
+              exit 1
+            }
+            echo "MySQL is ready"
+          fi
+      
+      - name: Run unit tests
+        if: matrix.test-suite == 'unit'
+        run: |
+          echo "Running unit tests with optimized parallelization..."
+          start_time=$(date +%s)
+          # Use all available cores for unit tests (no external dependencies)
+          cargo test --lib --verbose --jobs $(nproc)
+          end_time=$(date +%s)
+          duration=$((end_time - start_time))
+          echo "Unit tests completed in ${duration} seconds using $(nproc) parallel jobs"
+      
+      - name: Run integration tests
+        if: matrix.test-suite == 'integration'
+        run: |
+          echo "Running integration tests with controlled parallelization..."
+          start_time=$(date +%s)
+          # Use limited parallelization for integration tests to avoid database contention
+          cargo test --test '*' --verbose --jobs $CARGO_BUILD_JOBS
+          end_time=$(date +%s)
+          duration=$((end_time - start_time))
+          echo "Integration tests completed in ${duration} seconds using $CARGO_BUILD_JOBS parallel jobs"
+      
+      - name: Run SQL Server tests
+        if: matrix.test-suite == 'sqlserver'
+        env:
+          SQLSERVER_CONNECTION_STRING: "Server=localhost,1433;Database=tempdb;User Id=sa;Password=YourStrong@Passw0rd;TrustServerCertificate=true;"
+          SQLSERVER_HOST: localhost
+          SQLSERVER_PORT: 1433
+          SQLSERVER_USER: sa
+          SQLSERVER_PASSWORD: YourStrong@Passw0rd
+          SQLSERVER_DATABASE: tempdb
+        run: |
+          echo "Attempting SQL Server connection to $SQLSERVER_HOST:$SQLSERVER_PORT"
+          echo "Database: $SQLSERVER_DATABASE, User: $SQLSERVER_USER"
+          
+          # Retry logic for SQL Server tests with detailed error reporting
+          for attempt in 1 2 3; do
+            echo "SQL Server test attempt $attempt of 3"
+            if cargo test sqlserver --verbose 2>&1 | tee sqlserver_test_output.log; then
+              echo "SQL Server tests passed on attempt $attempt"
+              break
+            else
+              echo "SQL Server test attempt $attempt failed"
+              if [ $attempt -eq 3 ]; then
+                echo "All SQL Server test attempts failed. Connection details:"
+                echo "Host: $SQLSERVER_HOST"
+                echo "Port: $SQLSERVER_PORT" 
+                echo "Database: $SQLSERVER_DATABASE"
+                echo "User: $SQLSERVER_USER"
+                echo "Connection String: $SQLSERVER_CONNECTION_STRING"
+                echo "Test output:"
+                cat sqlserver_test_output.log
+                exit 1
+              fi
+              echo "Waiting 10 seconds before retry..."
+              sleep 10
+            fi
+          done
+      
+      - name: Run PostgreSQL tests
+        if: matrix.test-suite == 'integration'
+        env:
+          POSTGRES_CONNECTION_STRING: "postgresql://postgres:postgres@localhost:5432/testdb"
+          POSTGRES_HOST: localhost
+          POSTGRES_PORT: 5432
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DATABASE: testdb
+        run: |
+          echo "Attempting PostgreSQL connection to $POSTGRES_HOST:$POSTGRES_PORT"
+          echo "Database: $POSTGRES_DATABASE, User: $POSTGRES_USER"
+          
+          # Retry logic for PostgreSQL tests with detailed error reporting
+          for attempt in 1 2 3; do
+            echo "PostgreSQL test attempt $attempt of 3"
+            if cargo test postgres --verbose 2>&1 | tee postgres_test_output.log; then
+              echo "PostgreSQL tests passed on attempt $attempt"
+              break
+            else
+              echo "PostgreSQL test attempt $attempt failed"
+              if [ $attempt -eq 3 ]; then
+                echo "All PostgreSQL test attempts failed. Connection details:"
+                echo "Host: $POSTGRES_HOST"
+                echo "Port: $POSTGRES_PORT"
+                echo "Database: $POSTGRES_DATABASE"
+                echo "User: $POSTGRES_USER"
+                echo "Connection String: $POSTGRES_CONNECTION_STRING"
+                echo "Test output:"
+                cat postgres_test_output.log
+                exit 1
+              fi
+              echo "Waiting 10 seconds before retry..."
+              sleep 10
+            fi
+          done
+      
+      - name: Run MySQL protocol tests
+        if: matrix.test-suite == 'protocol'
+        env:
+          MYSQL_CONNECTION_STRING: "mysql://testuser:testpassword@localhost:3306/testdb"
+          MYSQL_HOST: localhost
+          MYSQL_PORT: 3306
+          MYSQL_USER: testuser
+          MYSQL_PASSWORD: testpassword
+          MYSQL_DATABASE: testdb
+        run: |
+          echo "Attempting MySQL connection to $MYSQL_HOST:$MYSQL_PORT"
+          echo "Database: $MYSQL_DATABASE, User: $MYSQL_USER"
+          
+          # Retry logic for MySQL tests with detailed error reporting
+          for attempt in 1 2 3; do
+            echo "MySQL test attempt $attempt of 3"
+            if cargo test mysql --verbose 2>&1 | tee mysql_test_output.log; then
+              echo "MySQL tests passed on attempt $attempt"
+              break
+            else
+              echo "MySQL test attempt $attempt failed"
+              if [ $attempt -eq 3 ]; then
+                echo "All MySQL test attempts failed. Connection details:"
+                echo "Host: $MYSQL_HOST"
+                echo "Port: $MYSQL_PORT"
+                echo "Database: $MYSQL_DATABASE"
+                echo "User: $MYSQL_USER"
+                echo "Connection String: $MYSQL_CONNECTION_STRING"
+                echo "Test output:"
+                cat mysql_test_output.log
+                exit 1
+              fi
+              echo "Waiting 10 seconds before retry..."
+              sleep 10
+            fi
+          done
+      
+      - name: Run protocol tests
+        if: matrix.test-suite == 'protocol'
+        run: |
+          echo "Running protocol tests..."
+          start_time=$(date +%s)
+          cargo test protocol --verbose
+          end_time=$(date +%s)
+          duration=$((end_time - start_time))
+          echo "Protocol tests completed in ${duration} seconds"
+      
+      - name: Check test job time threshold
+        run: |
+          start_time=${{ steps.timing.outputs.start-time }}
+          end_time=$(date +%s)
+          duration=$((end_time - start_time))
+          duration_minutes=$((duration / 60))
+          
+          echo "Test suite '${{ matrix.test-suite }}' duration: ${duration_minutes} minutes (${duration} seconds)"
+          
+          if [ $duration_minutes -gt $MAX_TEST_TIME ]; then
+            echo "WARNING: Test suite '${{ matrix.test-suite }}' exceeded threshold of $MAX_TEST_TIME minutes"
+            echo "Consider optimizing test performance or splitting test suites"
+          else
+            echo "Test suite completed within acceptable time"
+          fi
+
+  # Performance monitoring and reporting job with cache analysis
+  performance-report:
+    name: Performance Report
+    runs-on: ubuntu-latest
+    needs: [prepare, quality, test]
+    if: always()  # Run even if previous jobs fail
+    steps:
+      - name: Generate comprehensive performance and cache report
+        run: |
+          echo "=== Comprehensive Pipeline Performance & Cache Report ==="
+          echo "Generated at: $(date)"
+          echo ""
+          
+          # Calculate total pipeline duration
+          prepare_start=${{ needs.prepare.outputs.prepare-start-time }}
+          current_time=$(date +%s)
+          total_duration=$((current_time - prepare_start))
+          total_minutes=$((total_duration / 60))
+          
+          echo "Total pipeline duration: ${total_minutes} minutes (${total_duration} seconds)"
+          echo "Performance threshold: $MAX_TOTAL_PIPELINE_TIME minutes"
+          echo ""
+          
+          # Cache effectiveness analysis
+          echo "=== Cache Performance Analysis ==="
+          
+          # Estimate cache savings (assuming 50% time reduction with effective caching)
+          if [ -n "$CACHE_HIT_RATE" ] && [ "$CACHE_HIT_RATE" -gt 0 ]; then
+            estimated_savings=$((total_duration * CACHE_HIT_RATE / 200))  # 50% max savings
+            echo "Estimated time savings from caching: ${estimated_savings} seconds"
+            echo "Cache hit rate: ${CACHE_HIT_RATE}%"
+            echo "Total cache size: $(echo ${TOTAL_CACHE_SIZE:-0} | awk '{printf "%.2f MB", $1/1024/1024}')"
+          else
+            echo "Cache metrics not available - first run or cache miss"
+          fi
+          
+          # Cache invalidation verification
+          echo ""
+          echo "=== Cache Invalidation Analysis ==="
+          echo "Cache invalidation logic has been implemented to:"
+          echo "- Monitor Cargo.lock changes for dependency cache invalidation"
+          echo "- Track source code changes for build cache invalidation"
+          echo "- Provide detailed cache hit/miss reporting"
+          echo "- Validate cache effectiveness across all jobs"
+          
+          # Performance recommendations based on cache effectiveness
+          echo ""
+          echo "=== Performance Optimization Recommendations ==="
+          
+          if [ -n "$CACHE_HIT_RATE" ]; then
+            if [ "$CACHE_HIT_RATE" -lt 30 ]; then
+              echo "🔴 CRITICAL: Very low cache hit rate (${CACHE_HIT_RATE}%)"
+              echo "Recommendations:"
+              echo "- Review cache key strategies"
+              echo "- Check for frequent dependency changes"
+              echo "- Consider cache warming strategies"
+            elif [ "$CACHE_HIT_RATE" -lt 70 ]; then
+              echo "🟡 MODERATE: Acceptable cache hit rate (${CACHE_HIT_RATE}%)"
+              echo "Recommendations:"
+              echo "- Monitor cache invalidation patterns"
+              echo "- Consider optimizing cache keys"
+            else
+              echo "🟢 EXCELLENT: High cache hit rate (${CACHE_HIT_RATE}%)"
+              echo "Cache optimization is working effectively"
+            fi
+          fi
+          
+          # Check if pipeline exceeded threshold
+          if [ $total_minutes -gt $MAX_TOTAL_PIPELINE_TIME ]; then
+            echo ""
+            echo "❌ PERFORMANCE ALERT: Pipeline exceeded threshold of $MAX_TOTAL_PIPELINE_TIME minutes"
+            echo "Current duration: ${total_minutes} minutes"
+            echo "Recommendations:"
+            echo "- Review caching effectiveness (current hit rate: ${CACHE_HIT_RATE:-unknown}%)"
+            echo "- Consider optimizing test parallelization"
+            echo "- Check for resource contention"
+            echo "- Review dependency build times"
+            exit 1
+          else
+            echo ""
+            echo "✅ Pipeline completed within acceptable performance bounds"
+            echo "Duration: ${total_minutes}/${MAX_TOTAL_PIPELINE_TIME} minutes"
+          fi
+          
+          echo ""
+          echo "=== Performance Metrics Summary ==="
+          echo "- Prepare job threshold: $MAX_PREPARE_TIME minutes"
+          echo "- Quality check threshold: $MAX_QUALITY_TIME minutes"
+          echo "- Test suite threshold: $MAX_TEST_TIME minutes"
+          echo "- Total pipeline threshold: $MAX_TOTAL_PIPELINE_TIME minutes"
+          echo "- Cache hit rate: ${CACHE_HIT_RATE:-N/A}%"
+          echo "- Estimated cache savings: ${estimated_savings:-N/A} seconds"

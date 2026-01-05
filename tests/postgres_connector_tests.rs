@@ -161,7 +161,10 @@ mod tests {
             NirvError::Connector(ConnectorError::ConnectionFailed(_)) => {
                 // Expected error for invalid connection
             }
-            _ => panic!("Expected ConnectionFailed error"),
+            NirvError::Connector(ConnectorError::Timeout(_)) => {
+                // Also acceptable - timeout on invalid host
+            }
+            other => panic!("Expected ConnectionFailed or Timeout error, got: {:?}", other),
         }
         
         assert!(!connector.is_connected());

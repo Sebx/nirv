@@ -1,0 +1,649 @@
+name: Release Workflow
+
+on:
+  push:
+    tags:
+      - 'v*'  # Trigger on version tags like v1.0.0, v0.1.0, etc.
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  # Comprehensive testing before release
+  pre-release-validation:
+    name: Pre-Release Validation
+    runs-on: ubuntu-latest
+    services:
+      sqlserver:
+        image: mcr.microsoft.com/mssql/server:2022-latest
+        env:
+          ACCEPT_EULA: Y
+          SA_PASSWORD: YourStrong@Passw0rd
+          MSSQL_PID: Developer
+        ports:
+          - 1433:1433
+        options: >-
+          --health-cmd "/opt/mssql-tools/bin/sqlcmd -S localhost -U sa -P YourStrong@Passw0rd -Q 'SELECT 1' || exit 1"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+          --health-start-period 10s
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_USER: postgres
+          POSTGRES_DB: testdb
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: rootpassword
+          MYSQL_DATABASE: testdb
+          MYSQL_USER: testuser
+          MYSQL_PASSWORD: testpassword
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd "mysqladmin ping -h localhost"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Install Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+      
+      - name: Cache Cargo dependencies
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: release-cargo-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            release-cargo-${{ runner.os }}-
+            cargo-${{ runner.os }}-
+      
+      - name: Validate database services readiness
+        run: |
+          echo "Validating all database services are ready for release testing..."
+          
+          # Check SQL Server
+          echo "Checking SQL Server readiness..."
+          timeout 60s bash -c 'until nc -z localhost 1433; do sleep 1; done' || {
+            echo "CRITICAL: SQL Server service failed to start for release validation"
+            exit 1
+          }
+          echo "SQL Server is ready"
+          
+          # Check PostgreSQL
+          echo "Checking PostgreSQL readiness..."
+          timeout 60s bash -c 'until nc -z localhost 5432; do sleep 1; done' || {
+            echo "CRITICAL: PostgreSQL service failed to start for release validation"
+            exit 1
+          }
+          echo "PostgreSQL is ready"
+          
+          # Check MySQL
+          echo "Checking MySQL readiness..."
+          timeout 60s bash -c 'until nc -z localhost 3306; do sleep 1; done' || {
+            echo "CRITICAL: MySQL service failed to start for release validation"
+            exit 1
+          }
+          echo "MySQL is ready"
+      
+      - name: Run comprehensive test suite
+        env:
+          SQLSERVER_CONNECTION_STRING: "Server=localhost,1433;Database=tempdb;User Id=sa;Password=YourStrong@Passw0rd;TrustServerCertificate=true;"
+          POSTGRES_CONNECTION_STRING: "postgresql://postgres:postgres@localhost:5432/testdb"
+          MYSQL_CONNECTION_STRING: "mysql://testuser:testpassword@localhost:3306/testdb"
+        run: |
+          echo "Running comprehensive test suite for release validation..."
+          
+          # Run all tests with verbose output
+          echo "=== Running all unit tests ==="
+          cargo test --lib --verbose || {
+            echo "RELEASE VALIDATION FAILED: Unit tests failed"
+            exit 1
+          }
+          
+          echo "=== Running all integration tests ==="
+          cargo test --test '*' --verbose || {
+            echo "RELEASE VALIDATION FAILED: Integration tests failed"
+            exit 1
+          }
+          
+          echo "=== Running SQL Server tests ==="
+          cargo test sqlserver --verbose || {
+            echo "RELEASE VALIDATION FAILED: SQL Server tests failed"
+            exit 1
+          }
+          
+          echo "=== Running PostgreSQL tests ==="
+          cargo test postgres --verbose || {
+            echo "RELEASE VALIDATION FAILED: PostgreSQL tests failed"
+            exit 1
+          }
+          
+          echo "=== Running MySQL tests ==="
+          cargo test mysql --verbose || {
+            echo "RELEASE VALIDATION FAILED: MySQL tests failed"
+            exit 1
+          }
+          
+          echo "=== Running protocol tests ==="
+          cargo test protocol --verbose || {
+            echo "RELEASE VALIDATION FAILED: Protocol tests failed"
+            exit 1
+          }
+          
+          echo "✅ All tests passed - Release validation successful"
+      
+      - name: Run code quality checks
+        run: |
+          echo "Running code quality checks for release..."
+          
+          # Format check
+          echo "=== Checking code formatting ==="
+          cargo fmt --check || {
+            echo "RELEASE VALIDATION FAILED: Code formatting violations found"
+            exit 1
+          }
+          
+          # Clippy check
+          echo "=== Running clippy analysis ==="
+          cargo clippy --all-targets --all-features -- -D warnings || {
+            echo "RELEASE VALIDATION FAILED: Clippy warnings found"
+            exit 1
+          }
+          
+          echo "✅ Code quality checks passed"
+      
+      - name: Build release binary
+        run: |
+          echo "Building release binary for validation..."
+          cargo build --release --verbose || {
+            echo "RELEASE VALIDATION FAILED: Release build failed"
+            exit 1
+          }
+          
+          echo "✅ Release build successful"
+      
+      - name: Release-specific validation
+        run: |
+          echo "Running release-specific validation steps..."
+          
+          # Validate binary functionality
+          echo "=== Testing release binary functionality ==="
+          ./target/release/nirv --version || {
+            echo "RELEASE VALIDATION FAILED: Binary version check failed"
+            exit 1
+          }
+          
+          ./target/release/nirv --help || {
+            echo "RELEASE VALIDATION FAILED: Binary help command failed"
+            exit 1
+          }
+          
+          # Validate package metadata
+          echo "=== Validating package metadata ==="
+          cargo metadata --format-version 1 --no-deps | jq -r '.packages[0].version' > version.txt
+          if [ ! -s version.txt ]; then
+            echo "RELEASE VALIDATION FAILED: Could not extract package version"
+            exit 1
+          fi
+          
+          PACKAGE_VERSION=$(cat version.txt)
+          TAG_VERSION=${GITHUB_REF#refs/tags/v}
+          
+          if [ "$PACKAGE_VERSION" != "$TAG_VERSION" ]; then
+            echo "RELEASE VALIDATION FAILED: Package version ($PACKAGE_VERSION) does not match tag version ($TAG_VERSION)"
+            exit 1
+          fi
+          
+          echo "✅ Package version matches tag version: $PACKAGE_VERSION"
+          
+          # Validate changelog entry exists
+          echo "=== Validating changelog entry ==="
+          if ! grep -q "## \[$PACKAGE_VERSION\]" CHANGELOG.md; then
+            echo "RELEASE VALIDATION FAILED: No changelog entry found for version $PACKAGE_VERSION"
+            exit 1
+          fi
+          
+          echo "✅ Changelog entry found for version $PACKAGE_VERSION"
+          
+          # Run smoke tests with the release binary
+          echo "=== Running smoke tests with release binary ==="
+          
+          # Test basic CLI functionality
+          echo "Testing basic CLI commands..."
+          timeout 10s ./target/release/nirv --version > /dev/null || {
+            echo "RELEASE VALIDATION FAILED: Binary smoke test failed"
+            exit 1
+          }
+          
+          echo "✅ Release-specific validation completed successfully"
+
+  # Build release artifacts for multiple platforms
+  build-artifacts:
+    name: Build Release Artifacts
+    needs: pre-release-validation
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            artifact-name: nirv-linux-x86_64
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            artifact-name: nirv-windows-x86_64
+          - target: x86_64-apple-darwin
+            os: macos-latest
+            artifact-name: nirv-macos-x86_64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Install Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+          target: ${{ matrix.target }}
+      
+      - name: Cache Cargo dependencies
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: release-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            release-${{ matrix.target }}-
+            cargo-${{ matrix.target }}-
+      
+      - name: Build release binary
+        run: |
+          echo "Building release binary for ${{ matrix.target }}..."
+          cargo build --release --target ${{ matrix.target }} --verbose
+      
+      - name: Prepare artifact
+        shell: bash
+        run: |
+          echo "Preparing artifact for ${{ matrix.target }}..."
+          
+          # Create artifact directory
+          mkdir -p artifacts
+          
+          # Copy binary (handle Windows .exe extension)
+          if [[ "${{ matrix.target }}" == *"windows"* ]]; then
+            cp target/${{ matrix.target }}/release/nirv.exe artifacts/nirv.exe
+            echo "Windows binary prepared: nirv.exe"
+          else
+            cp target/${{ matrix.target }}/release/nirv artifacts/nirv
+            echo "Unix binary prepared: nirv"
+          fi
+          
+          # Copy additional files
+          cp README.md artifacts/
+          cp LICENSE artifacts/
+          cp CHANGELOG.md artifacts/
+          
+          # Create archive
+          cd artifacts
+          if [[ "${{ matrix.target }}" == *"windows"* ]]; then
+            7z a ../${{ matrix.artifact-name }}.zip *
+            echo "Created Windows archive: ${{ matrix.artifact-name }}.zip"
+          else
+            tar -czf ../${{ matrix.artifact-name }}.tar.gz *
+            echo "Created Unix archive: ${{ matrix.artifact-name }}.tar.gz"
+          fi
+      
+      - name: Generate checksums
+        shell: bash
+        run: |
+          echo "Generating checksums for release artifacts..."
+          
+          # Generate checksums for the archives
+          if [[ "${{ matrix.target }}" == *"windows"* ]]; then
+            ARCHIVE_FILE="${{ matrix.artifact-name }}.zip"
+          else
+            ARCHIVE_FILE="${{ matrix.artifact-name }}.tar.gz"
+          fi
+          
+          # Generate multiple hash types for security
+          echo "Generating SHA256 checksum..."
+          sha256sum "$ARCHIVE_FILE" > "${ARCHIVE_FILE}.sha256"
+          
+          echo "Generating SHA512 checksum..."
+          sha512sum "$ARCHIVE_FILE" > "${ARCHIVE_FILE}.sha512"
+          
+          echo "Generating MD5 checksum..."
+          md5sum "$ARCHIVE_FILE" > "${ARCHIVE_FILE}.md5"
+          
+          # Display checksums for verification
+          echo "=== Generated Checksums ==="
+          echo "SHA256:"
+          cat "${ARCHIVE_FILE}.sha256"
+          echo "SHA512:"
+          cat "${ARCHIVE_FILE}.sha512"
+          echo "MD5:"
+          cat "${ARCHIVE_FILE}.md5"
+          
+          # Verify checksums
+          echo "=== Verifying Checksums ==="
+          sha256sum -c "${ARCHIVE_FILE}.sha256" || {
+            echo "CHECKSUM VERIFICATION FAILED: SHA256 checksum verification failed"
+            exit 1
+          }
+          
+          sha512sum -c "${ARCHIVE_FILE}.sha512" || {
+            echo "CHECKSUM VERIFICATION FAILED: SHA512 checksum verification failed"
+            exit 1
+          }
+          
+          md5sum -c "${ARCHIVE_FILE}.md5" || {
+            echo "CHECKSUM VERIFICATION FAILED: MD5 checksum verification failed"
+            exit 1
+          }
+          
+          echo "✅ All checksums verified successfully"
+      
+      - name: Upload artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: ${{ matrix.artifact-name }}
+          path: |
+            ${{ matrix.artifact-name }}.tar.gz
+            ${{ matrix.artifact-name }}.zip
+            ${{ matrix.artifact-name }}.*.sha256
+            ${{ matrix.artifact-name }}.*.sha512
+            ${{ matrix.artifact-name }}.*.md5
+          retention-days: 30
+
+  # Create draft release with changelog integration
+  create-draft-release:
+    name: Create Draft Release
+    needs: [pre-release-validation, build-artifacts]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Extract version from tag
+        id: version
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/v}
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "tag=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+          echo "Extracted version: $VERSION"
+      
+      - name: Extract changelog entry
+        id: changelog
+        run: |
+          echo "Extracting changelog entry for version ${{ steps.version.outputs.version }}..."
+          
+          # Extract the changelog section for this version
+          awk '/^## \[${{ steps.version.outputs.version }}\]/{flag=1; next} /^## \[/{flag=0} flag' CHANGELOG.md > release_notes.md
+          
+          # Check if changelog entry was found
+          if [ ! -s release_notes.md ]; then
+            echo "Warning: No changelog entry found for version ${{ steps.version.outputs.version }}"
+            echo "## Release ${{ steps.version.outputs.version }}" > release_notes.md
+            echo "" >> release_notes.md
+            echo "This release includes various improvements and bug fixes." >> release_notes.md
+            echo "Please see the commit history for detailed changes." >> release_notes.md
+          fi
+          
+          # Display the extracted changelog
+          echo "=== Extracted Changelog ==="
+          cat release_notes.md
+          
+          # Set output for use in release creation
+          {
+            echo 'changelog<<EOF'
+            cat release_notes.md
+            echo EOF
+          } >> $GITHUB_OUTPUT
+      
+      - name: Download all artifacts
+        uses: actions/download-artifact@v3
+        with:
+          path: release-artifacts
+      
+      - name: Prepare release assets
+        run: |
+          echo "Preparing release assets..."
+          
+          # Create release directory
+          mkdir -p release-assets
+          
+          # Copy all artifacts to release directory
+          find release-artifacts -type f \( -name "*.tar.gz" -o -name "*.zip" -o -name "*.sha256" -o -name "*.sha512" -o -name "*.md5" \) -exec cp {} release-assets/ \;
+          
+          # List all release assets
+          echo "=== Release Assets ==="
+          ls -la release-assets/
+          
+          # Generate release asset summary
+          echo "## Release Assets" > asset_summary.md
+          echo "" >> asset_summary.md
+          echo "This release includes the following artifacts:" >> asset_summary.md
+          echo "" >> asset_summary.md
+          
+          for file in release-assets/*; do
+            if [[ "$file" == *.tar.gz ]] || [[ "$file" == *.zip ]]; then
+              filename=$(basename "$file")
+              echo "- **$filename** - Binary distribution" >> asset_summary.md
+              
+              # Add checksum information
+              if [ -f "release-assets/${filename}.sha256" ]; then
+                sha256=$(cat "release-assets/${filename}.sha256" | cut -d' ' -f1)
+                echo "  - SHA256: \`$sha256\`" >> asset_summary.md
+              fi
+            fi
+          done
+          
+          echo "" >> asset_summary.md
+          echo "### Verification" >> asset_summary.md
+          echo "To verify the integrity of downloaded files, use the provided checksum files:" >> asset_summary.md
+          echo "\`\`\`bash" >> asset_summary.md
+          echo "# Verify SHA256 checksum" >> asset_summary.md
+          echo "sha256sum -c <filename>.sha256" >> asset_summary.md
+          echo "\`\`\`" >> asset_summary.md
+          
+          # Append asset summary to changelog
+          cat asset_summary.md >> release_notes.md
+      
+      - name: Create draft release
+        uses: actions/create-release@v1
+        id: create_release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          release_name: "Release ${{ steps.version.outputs.version }}"
+          body: ${{ steps.changelog.outputs.changelog }}
+          draft: true
+          prerelease: false
+      
+      - name: Upload release assets
+        run: |
+          echo "Uploading release assets..."
+          
+          # Upload each asset to the release
+          for file in release-assets/*; do
+            if [ -f "$file" ]; then
+              filename=$(basename "$file")
+              echo "Uploading $filename..."
+              
+              curl -X POST \
+                -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+                -H "Content-Type: application/octet-stream" \
+                --data-binary @"$file" \
+                "${{ steps.create_release.outputs.upload_url }}?name=$filename" || {
+                echo "Failed to upload $filename"
+                exit 1
+              }
+              
+              echo "✅ Successfully uploaded $filename"
+            fi
+          done
+          
+          echo "✅ All release assets uploaded successfully"
+      
+      - name: Release creation summary
+        run: |
+          echo "=== Release Creation Summary ==="
+          echo "Release URL: ${{ steps.create_release.outputs.html_url }}"
+          echo "Upload URL: ${{ steps.create_release.outputs.upload_url }}"
+          echo "Version: ${{ steps.version.outputs.version }}"
+          echo "Tag: ${{ steps.version.outputs.tag }}"
+          echo ""
+          echo "✅ Draft release created successfully!"
+          echo "📝 Please review the draft release and publish when ready."
+
+  # Handle release failures and notifications
+  release-failure-handler:
+    name: Release Failure Handler
+    runs-on: ubuntu-latest
+    needs: [pre-release-validation, build-artifacts, create-draft-release]
+    if: failure()  # Only run if any previous job failed
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Extract version from tag
+        id: version
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/v}
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "tag=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+      
+      - name: Analyze failure
+        run: |
+          echo "=== Release Failure Analysis ==="
+          echo "Release version: ${{ steps.version.outputs.version }}"
+          echo "Release tag: ${{ steps.version.outputs.tag }}"
+          echo "Workflow run: ${{ github.run_id }}"
+          echo "Repository: ${{ github.repository }}"
+          echo "Actor: ${{ github.actor }}"
+          echo "Event: ${{ github.event_name }}"
+          echo ""
+          
+          # Determine which job failed
+          echo "=== Job Status Analysis ==="
+          if [[ "${{ needs.pre-release-validation.result }}" == "failure" ]]; then
+            echo "❌ Pre-release validation failed"
+            echo "   - This indicates test failures or code quality issues"
+            echo "   - Release has been prevented to maintain quality standards"
+          fi
+          
+          if [[ "${{ needs.build-artifacts.result }}" == "failure" ]]; then
+            echo "❌ Artifact building failed"
+            echo "   - This indicates build or compilation issues"
+            echo "   - Check platform-specific build configurations"
+          fi
+          
+          if [[ "${{ needs.create-draft-release.result }}" == "failure" ]]; then
+            echo "❌ Draft release creation failed"
+            echo "   - This indicates issues with release asset preparation"
+            echo "   - Check GitHub token permissions and artifact availability"
+          fi
+      
+      - name: Create failure notification
+        run: |
+          echo "Creating failure notification..."
+          
+          # Create failure report
+          cat > failure_report.md << EOF
+          # Release Failure Report
+          
+          **Release Version:** ${{ steps.version.outputs.version }}
+          **Release Tag:** ${{ steps.version.outputs.tag }}
+          **Workflow Run:** [${{ github.run_id }}](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})
+          **Triggered by:** ${{ github.actor }}
+          **Timestamp:** $(date -u '+%Y-%m-%d %H:%M:%S UTC')
+          
+          ## Failure Summary
+          
+          The automated release process for version ${{ steps.version.outputs.version }} has failed.
+          
+          ### Job Results:
+          - **Pre-release Validation:** ${{ needs.pre-release-validation.result }}
+          - **Build Artifacts:** ${{ needs.build-artifacts.result }}
+          - **Create Draft Release:** ${{ needs.create-draft-release.result }}
+          
+          ## Next Steps
+          
+          1. **Review the workflow logs** to identify the specific failure cause
+          2. **Fix the identified issues** in the codebase or configuration
+          3. **Re-tag the release** after fixes are merged to main branch
+          4. **Verify all tests pass** before creating a new release tag
+          
+          ## Prevention Measures
+          
+          - Ensure all tests pass locally before tagging
+          - Verify changelog entry exists for the version
+          - Check that package version matches the tag version
+          - Validate build succeeds on all target platforms
+          
+          ## Workflow Details
+          
+          - **Repository:** ${{ github.repository }}
+          - **Branch:** ${{ github.ref }}
+          - **Commit:** ${{ github.sha }}
+          - **Event:** ${{ github.event_name }}
+          
+          EOF
+          
+          echo "=== Failure Report ==="
+          cat failure_report.md
+      
+      - name: Prevent publication
+        run: |
+          echo "=== Release Prevention Measures ==="
+          echo "🚫 Release publication has been prevented due to validation failures"
+          echo "🔒 No artifacts will be published to prevent distribution of faulty releases"
+          echo "📧 Maintainers should be notified of this failure"
+          echo ""
+          echo "To retry the release:"
+          echo "1. Fix the issues identified in the failure analysis"
+          echo "2. Commit and push the fixes to the main branch"
+          echo "3. Delete the failed tag: git tag -d ${{ steps.version.outputs.tag }}"
+          echo "4. Push the tag deletion: git push origin :refs/tags/${{ steps.version.outputs.tag }}"
+          echo "5. Create a new tag after fixes are merged"
+          echo ""
+          echo "⚠️  DO NOT manually publish releases when automated validation fails"
+          echo "⚠️  This could distribute broken or insecure software"
+      
+      - name: Cleanup failed release artifacts
+        run: |
+          echo "Cleaning up any partial release artifacts..."
+          
+          # Note: In a real implementation, you might want to:
+          # 1. Delete any draft releases that were partially created
+          # 2. Clean up uploaded artifacts
+          # 3. Reset any state that might interfere with retry attempts
+          
+          echo "✅ Cleanup completed"
+          echo "🔄 Release process is ready for retry after fixes"

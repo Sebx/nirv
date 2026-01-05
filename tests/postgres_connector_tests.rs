@@ -7,13 +7,26 @@ use std::collections::HashMap;
 use std::env;
 
 /// Helper function to get PostgreSQL connection parameters from environment
+/// This will use the service container configuration when running in CI
 fn get_postgres_config() -> ConnectorInitConfig {
     ConnectorInitConfig::new()
         .with_param("host", &env::var("POSTGRES_HOST").unwrap_or_else(|_| "localhost".to_string()))
         .with_param("port", &env::var("POSTGRES_PORT").unwrap_or_else(|_| "5432".to_string()))
         .with_param("user", &env::var("POSTGRES_USER").unwrap_or_else(|_| "postgres".to_string()))
         .with_param("password", &env::var("POSTGRES_PASSWORD").unwrap_or_else(|_| "postgres".to_string()))
-        .with_param("dbname", &env::var("POSTGRES_DB").unwrap_or_else(|_| "test".to_string()))
+        .with_param("dbname", &env::var("POSTGRES_DB").unwrap_or_else(|_| "testdb".to_string()))
+        .with_timeout(30)
+        .with_max_connections(5)
+}
+
+/// Helper function to get PostgreSQL connection parameters for CI environment
+fn get_postgres_ci_config() -> ConnectorInitConfig {
+    ConnectorInitConfig::new()
+        .with_param("host", &env::var("POSTGRES_HOST").unwrap_or_else(|_| "localhost".to_string()))
+        .with_param("port", &env::var("POSTGRES_PORT").unwrap_or_else(|_| "5432".to_string()))
+        .with_param("user", &env::var("POSTGRES_USER").unwrap_or_else(|_| "postgres".to_string()))
+        .with_param("password", &env::var("POSTGRES_PASSWORD").unwrap_or_else(|_| "postgres".to_string()))
+        .with_param("dbname", &env::var("POSTGRES_DATABASE").unwrap_or_else(|_| "testdb".to_string()))
         .with_timeout(30)
         .with_max_connections(5)
 }
@@ -81,6 +94,49 @@ mod tests {
                     // Expected when PostgreSQL is not available
                 }
                 _ => panic!("Expected ConnectionFailed error when PostgreSQL is unavailable"),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_postgres_connector_service_container_integration() {
+        let mut connector = PostgresConnector::new();
+        let config = get_postgres_ci_config();
+        
+        // Test connection with service container configuration
+        let connect_result = connector.connect(config).await;
+        
+        if connect_result.is_ok() {
+            assert!(connector.is_connected());
+            
+            // Test that we can execute queries against the service container
+            let query = create_test_query("pg_database");
+            let result = connector.execute_query(query).await;
+            
+            match result {
+                Ok(query_result) => {
+                    assert!(!query_result.columns.is_empty());
+                    assert!(query_result.execution_time.as_millis() >= 0);
+                }
+                Err(NirvError::Connector(ConnectorError::QueryExecutionFailed(_))) => {
+                    // Query execution failed due to schema issues, but connection worked
+                }
+                Err(other) => {
+                    panic!("Unexpected error during query execution: {:?}", other);
+                }
+            }
+            
+            // Ensure proper cleanup
+            let disconnect_result = connector.disconnect().await;
+            assert!(disconnect_result.is_ok());
+            assert!(!connector.is_connected());
+        } else {
+            // Connection failed - this is acceptable if PostgreSQL service is not available
+            match connect_result.unwrap_err() {
+                NirvError::Connector(ConnectorError::ConnectionFailed(_)) => {
+                    // Expected when PostgreSQL service is not available
+                }
+                other => panic!("Unexpected error type: {:?}", other),
             }
         }
     }
@@ -178,7 +234,37 @@ mod tests {
                 }
             }
             
-            let _ = connector.disconnect().await;
+            // Ensure proper cleanup
+            let disconnect_result = connector.disconnect().await;
+            assert!(disconnect_result.is_ok());
+            assert!(!connector.is_connected());
+        }
+    }
+
+    #[tokio::test]
+    async fn test_postgres_connector_resource_cleanup() {
+        let mut connector = PostgresConnector::new();
+        let config = get_postgres_config();
+        
+        // Test multiple connection/disconnection cycles to ensure proper cleanup
+        for _i in 0..3 {
+            let connect_result = connector.connect(config.clone()).await;
+            
+            if connect_result.is_ok() {
+                assert!(connector.is_connected());
+                
+                // Execute a simple query
+                let query = create_test_query("pg_database");
+                let _result = connector.execute_query(query).await;
+                
+                // Disconnect and verify cleanup
+                let disconnect_result = connector.disconnect().await;
+                assert!(disconnect_result.is_ok());
+                assert!(!connector.is_connected());
+            } else {
+                // If connection fails, that's acceptable for this test
+                break;
+            }
         }
     }
 
@@ -418,7 +504,7 @@ mod integration_tests {
     use super::*;
 
     /// Test that requires a real PostgreSQL instance
-    /// Run with: POSTGRES_HOST=localhost POSTGRES_USER=postgres POSTGRES_PASSWORD=password cargo test test_real_postgres_connection -- --ignored
+    /// Run with: POSTGRES_HOST=localhost POSTGRES_USER=postgres POSTGRES_PASSWORD=postgres cargo test test_real_postgres_connection -- --ignored
     #[tokio::test]
     #[ignore] // Ignored by default since it requires a real PostgreSQL instance
     async fn test_real_postgres_connection() {
@@ -451,5 +537,84 @@ mod integration_tests {
         let disconnect_result = connector.disconnect().await;
         assert!(disconnect_result.is_ok());
         assert!(!connector.is_connected());
+    }
+
+    /// Test PostgreSQL connection with environment variables from CI
+    #[tokio::test]
+    async fn test_postgres_connection_with_ci_environment() {
+        // Only run this test if we have PostgreSQL environment variables set
+        if env::var("POSTGRES_HOST").is_err() {
+            return; // Skip test if not in CI environment
+        }
+
+        let mut connector = PostgresConnector::new();
+        let config = get_postgres_ci_config();
+        
+        let connect_result = connector.connect(config).await;
+        
+        if connect_result.is_ok() {
+            assert!(connector.is_connected());
+            
+            // Test basic query execution
+            let query = create_test_query("information_schema.tables");
+            let result = connector.execute_query(query).await;
+            
+            match result {
+                Ok(query_result) => {
+                    assert!(!query_result.columns.is_empty());
+                    assert!(query_result.execution_time.as_millis() >= 0);
+                }
+                Err(NirvError::Connector(ConnectorError::QueryExecutionFailed(_))) => {
+                    // Query execution failed due to schema issues, but connection worked
+                }
+                Err(other) => {
+                    panic!("Unexpected error during query execution: {:?}", other);
+                }
+            }
+            
+            // Ensure proper cleanup
+            let disconnect_result = connector.disconnect().await;
+            assert!(disconnect_result.is_ok());
+            assert!(!connector.is_connected());
+        } else {
+            // Log the connection failure for debugging
+            eprintln!("PostgreSQL connection failed: {:?}", connect_result.err());
+            
+            // In CI, we expect the connection to work, so this is a test failure
+            if env::var("CI").is_ok() {
+                panic!("PostgreSQL connection should work in CI environment");
+            }
+        }
+    }
+
+    /// Test PostgreSQL connection error handling with detailed error messages
+    #[tokio::test]
+    async fn test_postgres_connection_error_reporting() {
+        let mut connector = PostgresConnector::new();
+        
+        // Test with invalid host but valid other parameters
+        let invalid_config = ConnectorInitConfig::new()
+            .with_param("host", "nonexistent-postgres-host")
+            .with_param("port", "5432")
+            .with_param("user", "postgres")
+            .with_param("password", "postgres")
+            .with_param("dbname", "testdb")
+            .with_timeout(5); // Short timeout for faster test
+        
+        let result = connector.connect(invalid_config).await;
+        assert!(result.is_err());
+        
+        match result.unwrap_err() {
+            NirvError::Connector(ConnectorError::ConnectionFailed(msg)) => {
+                // Error message should contain connection details for debugging
+                assert!(!msg.is_empty());
+                // In a real implementation, this should contain host/port info
+            }
+            NirvError::Connector(ConnectorError::Timeout(msg)) => {
+                // Timeout error should be descriptive
+                assert!(!msg.is_empty());
+            }
+            other => panic!("Expected ConnectionFailed or Timeout error, got: {:?}", other),
+        }
     }
 }

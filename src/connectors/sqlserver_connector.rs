@@ -319,11 +319,20 @@ impl Connector for SqlServerConnector {
         
         // Connect to SQL Server
         let tcp = tokio::time::timeout(timeout, TcpStream::connect(tiberius_config.get_addr())).await
-            .map_err(|_| ConnectorError::Timeout("Connection timeout".to_string()))?
-            .map_err(|e| ConnectorError::ConnectionFailed(format!("Failed to connect: {}", e)))?;
+            .map_err(|_| ConnectorError::Timeout(format!(
+                "Connection timeout after {}s when connecting to SQL Server at {}:{}",
+                timeout.as_secs(), server, port
+            )))?
+            .map_err(|e| ConnectorError::ConnectionFailed(format!(
+                "Failed to establish TCP connection to SQL Server at {}:{} - Error: {} (Check if server is running and port is accessible)",
+                server, port, e
+            )))?;
         
         let client = Client::connect(tiberius_config.clone(), tcp.compat_write()).await
-            .map_err(|e| ConnectorError::ConnectionFailed(format!("Failed to authenticate: {}", e)))?;
+            .map_err(|e| ConnectorError::ConnectionFailed(format!(
+                "Failed to authenticate with SQL Server at {}:{} using username '{}' - Error: {} (Check credentials and server configuration)",
+                server, port, username, e
+            )))?;
         
         self.client = Some(client);
         self.connection_config = Some(tiberius_config);

@@ -1,5 +1,50 @@
 use nirv_engine::protocol::{ProtocolAdapter, SQLiteProtocolAdapter, ProtocolType};
 use std::collections::HashMap;
+use std::env;
+use std::fs;
+use std::path::Path;
+use std::time;
+
+/// Helper function to get SQLite database path for CI environment
+fn get_sqlite_test_db_path() -> String {
+    if env::var("CI").is_ok() {
+        // In CI environment, use a temporary directory
+        format!("/tmp/nirv_test_{}.db", std::process::id())
+    } else {
+        // In local environment, use current directory
+        format!("./test_{}.db", std::process::id())
+    }
+}
+
+/// Helper function to clean up test database files
+fn cleanup_test_db(db_path: &str) {
+    if Path::new(db_path).exists() {
+        let _ = fs::remove_file(db_path);
+    }
+    
+    // Also clean up any associated files (WAL, SHM)
+    let wal_path = format!("{}-wal", db_path);
+    let shm_path = format!("{}-shm", db_path);
+    
+    if Path::new(&wal_path).exists() {
+        let _ = fs::remove_file(&wal_path);
+    }
+    
+    if Path::new(&shm_path).exists() {
+        let _ = fs::remove_file(&shm_path);
+    }
+}
+
+/// Helper function to ensure test directory exists in CI
+fn ensure_test_directory() {
+    if env::var("CI").is_ok() {
+        // Ensure /tmp directory is writable in CI
+        let test_dir = "/tmp";
+        if !Path::new(test_dir).exists() {
+            let _ = fs::create_dir_all(test_dir);
+        }
+    }
+}
 
 /// Test data structures for SQLite protocol testing
 #[derive(Debug, Clone)]
@@ -122,29 +167,65 @@ mod tests {
 
     #[tokio::test]
     async fn test_sqlite_file_based_connection() {
+        ensure_test_directory();
         let _protocol = SQLiteProtocolAdapter::new();
         let mut connection = TestConnection::new();
         
         // Test SQLite connection with actual file path
+        let test_db_path = get_sqlite_test_db_path();
         let connect_msg = SQLiteMessage::Connect {
-            database_path: "/tmp/test.db".to_string(),
-            flags: 0x00000002, // SQLITE_OPEN_READWRITE
+            database_path: test_db_path.clone(),
+            flags: 0x00000006, // SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE
         };
         
         match connect_msg {
             SQLiteMessage::Connect { database_path, flags } => {
-                assert_eq!(database_path, "/tmp/test.db");
-                assert_eq!(flags, 0x00000002);
+                assert_eq!(database_path, test_db_path);
+                assert_eq!(flags, 0x00000006);
                 
                 // Simulate successful file-based connection
                 connection.authenticated = true;
-                connection.database = database_path;
+                connection.database = database_path.clone();
             }
             _ => panic!("Expected Connect message"),
         }
         
         assert!(connection.authenticated);
-        assert_eq!(connection.database, "/tmp/test.db");
+        assert_eq!(connection.database, test_db_path);
+        
+        // Clean up test database file
+        cleanup_test_db(&test_db_path);
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_ci_environment_compatibility() {
+        ensure_test_directory();
+        let _protocol = SQLiteProtocolAdapter::new();
+        
+        // Test that SQLite works in CI environment
+        let test_db_path = get_sqlite_test_db_path();
+        
+        // Verify path is appropriate for CI environment
+        if env::var("CI").is_ok() {
+            assert!(test_db_path.starts_with("/tmp/"));
+        }
+        
+        // Test connection message creation
+        let connect_msg = SQLiteMessage::Connect {
+            database_path: test_db_path.clone(),
+            flags: 0x00000006,
+        };
+        
+        match connect_msg {
+            SQLiteMessage::Connect { database_path, flags } => {
+                assert_eq!(database_path, test_db_path);
+                assert_eq!(flags, 0x00000006);
+            }
+            _ => panic!("Expected Connect message"),
+        }
+        
+        // Clean up
+        cleanup_test_db(&test_db_path);
     }
 
     #[tokio::test]
@@ -385,6 +466,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_sqlite_connection_lifecycle() {
+        ensure_test_directory();
         let _protocol = SQLiteProtocolAdapter::new();
         let mut connection = TestConnection::new();
         
@@ -392,38 +474,96 @@ mod tests {
         assert!(!connection.authenticated);
         assert!(connection.database.is_empty());
         
-        // Simulate successful connection
-        connection.authenticated = true;
-        connection.database = "test.db".to_string();
-        connection.parameters.insert("journal_mode".to_string(), "WAL".to_string());
-        connection.parameters.insert("synchronous".to_string(), "NORMAL".to_string());
-        
-        assert!(connection.authenticated);
-        assert_eq!(connection.database, "test.db");
-        assert_eq!(connection.parameters.get("journal_mode"), Some(&"WAL".to_string()));
-        assert_eq!(connection.parameters.get("synchronous"), Some(&"NORMAL".to_string()));
-        
-        // Test connection close
-        let close_msg = SQLiteMessage::Close;
-        match close_msg {
-            SQLiteMessage::Close => {
-                connection.authenticated = false;
-                connection.database.clear();
-                connection.parameters.clear();
+        // Test multiple database connections with proper cleanup
+        for i in 0..3 {
+            let test_db_path = format!("{}_cycle_{}", get_sqlite_test_db_path(), i);
+            
+            // Simulate successful connection
+            connection.authenticated = true;
+            connection.database = test_db_path.clone();
+            connection.parameters.insert("journal_mode".to_string(), "WAL".to_string());
+            connection.parameters.insert("synchronous".to_string(), "NORMAL".to_string());
+            
+            assert!(connection.authenticated);
+            assert_eq!(connection.database, test_db_path);
+            assert_eq!(connection.parameters.get("journal_mode"), Some(&"WAL".to_string()));
+            assert_eq!(connection.parameters.get("synchronous"), Some(&"NORMAL".to_string()));
+            
+            // Test connection close with cleanup
+            let close_msg = SQLiteMessage::Close;
+            match close_msg {
+                SQLiteMessage::Close => {
+                    connection.authenticated = false;
+                    connection.database.clear();
+                    connection.parameters.clear();
+                    
+                    // Clean up database files
+                    cleanup_test_db(&test_db_path);
+                }
+                _ => panic!("Expected Close message"),
             }
-            _ => panic!("Expected Close message"),
+            
+            assert!(!connection.authenticated);
+            assert!(connection.database.is_empty());
+            assert!(connection.parameters.is_empty());
+        }
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_database_cleanup() {
+        ensure_test_directory();
+        let _protocol = SQLiteProtocolAdapter::new();
+        
+        // Test database file cleanup functionality
+        // Use a unique identifier to avoid conflicts with other tests
+        let unique_id = format!("{}_{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos());
+        let test_db_path = if env::var("CI").is_ok() {
+            format!("/tmp/nirv_cleanup_test_{}.db", unique_id)
+        } else {
+            format!("./cleanup_test_{}.db", unique_id)
+        };
+        
+        // Simulate creating database files (main, WAL, SHM)
+        let main_file = test_db_path.clone();
+        let wal_file = format!("{}-wal", test_db_path);
+        let shm_file = format!("{}-shm", test_db_path);
+        
+        // Create test files to simulate SQLite database files
+        match fs::write(&main_file, b"test database content") {
+            Ok(_) => {},
+            Err(e) => panic!("Failed to create test database file {}: {}", main_file, e),
+        }
+        match fs::write(&wal_file, b"test wal content") {
+            Ok(_) => {},
+            Err(e) => panic!("Failed to create test WAL file {}: {}", wal_file, e),
+        }
+        match fs::write(&shm_file, b"test shm content") {
+            Ok(_) => {},
+            Err(e) => panic!("Failed to create test SHM file {}: {}", shm_file, e),
         }
         
-        assert!(!connection.authenticated);
-        assert!(connection.database.is_empty());
-        assert!(connection.parameters.is_empty());
+        // Verify files exist
+        assert!(Path::new(&main_file).exists(), "Main database file should exist: {}", main_file);
+        assert!(Path::new(&wal_file).exists(), "WAL file should exist: {}", wal_file);
+        assert!(Path::new(&shm_file).exists(), "SHM file should exist: {}", shm_file);
+        
+        // Test cleanup
+        cleanup_test_db(&test_db_path);
+        
+        // Verify files are cleaned up
+        assert!(!Path::new(&main_file).exists(), "Main database file should be cleaned up: {}", main_file);
+        assert!(!Path::new(&wal_file).exists(), "WAL file should be cleaned up: {}", wal_file);
+        assert!(!Path::new(&shm_file).exists(), "SHM file should be cleaned up: {}", shm_file);
     }
 
     #[tokio::test]
     async fn test_sqlite_client_compatibility() {
+        ensure_test_directory();
         let _protocol = SQLiteProtocolAdapter::new();
         
         // Test compatibility with standard SQLite client operations
+        let test_db_path = get_sqlite_test_db_path();
+        
         let client_operations = vec![
             // Basic CRUD operations
             SQLiteMessage::Query {
@@ -461,6 +601,109 @@ mod tests {
                            sql.to_uppercase().contains("CREATE"));
                 }
                 _ => {}
+            }
+        }
+        
+        // Clean up
+        cleanup_test_db(&test_db_path);
+    }
+}
+
+/// Integration tests for SQLite protocol in CI environment
+#[cfg(test)]
+mod integration_tests {
+    use super::*;
+
+    /// Test SQLite protocol in CI environment with proper file handling
+    #[tokio::test]
+    async fn test_sqlite_protocol_ci_integration() {
+        ensure_test_directory();
+        let protocol = SQLiteProtocolAdapter::new();
+        
+        // Test protocol creation
+        assert_eq!(protocol.get_protocol_type(), ProtocolType::SQLite);
+        
+        // Test with CI-appropriate database path
+        let test_db_path = get_sqlite_test_db_path();
+        
+        // Test connection message for CI environment
+        let connect_msg = SQLiteMessage::Connect {
+            database_path: test_db_path.clone(),
+            flags: 0x00000006, // SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE
+        };
+        
+        match connect_msg {
+            SQLiteMessage::Connect { database_path, flags } => {
+                assert_eq!(database_path, test_db_path);
+                assert_eq!(flags, 0x00000006);
+                
+                // In CI, verify path is in appropriate location
+                if env::var("CI").is_ok() {
+                    assert!(database_path.starts_with("/tmp/"));
+                }
+            }
+            _ => panic!("Expected Connect message"),
+        }
+        
+        // Clean up
+        cleanup_test_db(&test_db_path);
+    }
+
+    /// Test SQLite protocol error handling in CI environment
+    #[tokio::test]
+    async fn test_sqlite_protocol_error_handling_ci() {
+        let protocol = SQLiteProtocolAdapter::new();
+        
+        // Test with invalid database path (read-only location in CI)
+        let invalid_path = if env::var("CI").is_ok() {
+            "/root/readonly/test.db".to_string() // Should fail in CI
+        } else {
+            "/invalid/path/test.db".to_string()
+        };
+        
+        let connect_msg = SQLiteMessage::Connect {
+            database_path: invalid_path.clone(),
+            flags: 0x00000002, // SQLITE_OPEN_READWRITE (no CREATE)
+        };
+        
+        // Protocol should handle this gracefully
+        match connect_msg {
+            SQLiteMessage::Connect { database_path, flags } => {
+                assert_eq!(database_path, invalid_path);
+                assert_eq!(flags, 0x00000002);
+                // Error handling would be done at connection time, not message creation
+            }
+            _ => panic!("Expected Connect message"),
+        }
+    }
+
+    /// Test SQLite protocol with temporary databases in CI
+    #[tokio::test]
+    async fn test_sqlite_protocol_temporary_databases() {
+        let protocol = SQLiteProtocolAdapter::new();
+        
+        // Test various temporary database configurations
+        let temp_configs = vec![
+            (":memory:", "In-memory database"),
+            ("", "Temporary file database"),
+            ("file::memory:?cache=shared", "Shared cache in-memory"),
+        ];
+        
+        for (db_path, description) in temp_configs {
+            let connect_msg = SQLiteMessage::Connect {
+                database_path: db_path.to_string(),
+                flags: 0x00000006,
+            };
+            
+            match connect_msg {
+                SQLiteMessage::Connect { database_path, flags } => {
+                    assert_eq!(database_path, db_path);
+                    assert_eq!(flags, 0x00000006);
+                    
+                    // These should work in any environment (no file cleanup needed)
+                    println!("Testing {}: {}", description, database_path);
+                }
+                _ => panic!("Expected Connect message for {}", description),
             }
         }
     }

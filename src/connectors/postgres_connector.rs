@@ -307,8 +307,14 @@ impl Connector for PostgresConnector {
         
         // Test the connection
         let _client = tokio::time::timeout(timeout, pool.get()).await
-            .map_err(|_| ConnectorError::Timeout("Connection timeout".to_string()))?
-            .map_err(|e| ConnectorError::ConnectionFailed(format!("Failed to get connection: {}", e)))?;
+            .map_err(|_| ConnectorError::Timeout(format!(
+                "Connection timeout after {}s when connecting to PostgreSQL at {}:{}",
+                timeout.as_secs(), host, port
+            )))?
+            .map_err(|e| ConnectorError::ConnectionFailed(format!(
+                "Failed to establish connection to PostgreSQL at {}:{} using username '{}' - Error: {} (Check if server is running, credentials are correct, and database '{}' exists)",
+                host, port, user, e, dbname
+            )))?;
         
         self.pool = Some(pool);
         self.connected = true;

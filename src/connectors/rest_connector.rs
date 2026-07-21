@@ -319,26 +319,25 @@ impl RestConnector {
         
         if let Some(JsonValue::Object(obj)) = data.first() {
             for (key, value) in obj {
-                    let data_type = match value {
-                        JsonValue::Null => DataType::Text,
-                        JsonValue::Bool(_) => DataType::Boolean,
-                        JsonValue::Number(n) => {
-                            if n.is_i64() {
-                                DataType::Integer
-                            } else {
-                                DataType::Float
-                            }
-                        },
-                        JsonValue::String(_) => DataType::Text,
-                        JsonValue::Array(_) | JsonValue::Object(_) => DataType::Json,
-                    };
-                    
-                    columns.push(ColumnMetadata {
-                        name: key.clone(),
-                        data_type,
-                        nullable: true,
-                    });
-                }
+                let data_type = match value {
+                    JsonValue::Null => DataType::Text,
+                    JsonValue::Bool(_) => DataType::Boolean,
+                    JsonValue::Number(n) => {
+                        if n.is_i64() {
+                            DataType::Integer
+                        } else {
+                            DataType::Float
+                        }
+                    },
+                    JsonValue::String(_) => DataType::Text,
+                    JsonValue::Array(_) | JsonValue::Object(_) => DataType::Json,
+                };
+
+                columns.push(ColumnMetadata {
+                    name: key.clone(),
+                    data_type,
+                    nullable: true,
+                });
             }
         }
         

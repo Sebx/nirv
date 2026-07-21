@@ -185,15 +185,13 @@ impl FileConnector {
 
                 // Infer schema from first object
                 let mut columns = Vec::new();
-                if let Some(first_obj) = array.first() {
-                    if let serde_json::Value::Object(obj) = first_obj {
-                        for key in obj.keys() {
-                            columns.push(ColumnMetadata {
-                                name: key.clone(),
-                                data_type: DataType::Text, // Default to text
-                                nullable: true,
-                            });
-                        }
+                if let Some(serde_json::Value::Object(obj)) = array.first() {
+                    for key in obj.keys() {
+                        columns.push(ColumnMetadata {
+                            name: key.clone(),
+                            data_type: DataType::Text, // Default to text
+                            nullable: true,
+                        });
                     }
                 }
 
@@ -336,7 +334,7 @@ impl FileConnector {
                     .replace('%', ".*")
                     .replace('_', ".");
                 
-                if let Ok(regex) = regex::Regex::new(&format!("^{}$", regex_pattern)) {
+                if let Ok(regex) = regex::Regex::new(&format!("^{regex_pattern}$")) {
                     regex.is_match(v)
                 } else {
                     false
@@ -375,13 +373,13 @@ impl Connector for FileConnector {
         
         if !base_path.exists() {
             return Err(ConnectorError::ConnectionFailed(
-                format!("Base path does not exist: {}", base_path_str)
+                format!("Base path does not exist: {base_path_str}")
             ).into());
         }
 
         if !base_path.is_dir() {
             return Err(ConnectorError::ConnectionFailed(
-                format!("Base path is not a directory: {}", base_path_str)
+                format!("Base path is not a directory: {base_path_str}")
             ).into());
         }
 
@@ -478,7 +476,7 @@ impl Connector for FileConnector {
         
         if file_paths.is_empty() {
             return Err(ConnectorError::SchemaRetrievalFailed(
-                format!("No files found for: {}", object_name)
+                format!("No files found for: {object_name}")
             ).into());
         }
 

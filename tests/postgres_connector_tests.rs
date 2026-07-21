@@ -625,4 +625,39 @@ mod integration_tests {
             other => panic!("Expected ConnectionFailed or Timeout error, got: {:?}", other),
         }
     }
+
+    /// Integration test: execute_query against a real PostgreSQL instance.
+    /// Skipped automatically when POSTGRES_HOST is not set.
+    /// Requirement 5.1
+    #[tokio::test]
+    async fn test_postgres_execute_query_real() {
+        if env::var("POSTGRES_HOST").is_err() {
+            return;
+        }
+        let mut connector = PostgresConnector::new();
+        let config = get_postgres_config();
+        connector.connect(config).await.expect("connect");
+        let query = create_test_query("information_schema.tables");
+        let result = connector.execute_query(query).await
+            .expect("execute_query");
+        assert!(!result.rows.is_empty());
+        let _ = connector.disconnect().await;
+    }
+
+    /// Integration test: get_schema against a real PostgreSQL instance.
+    /// Skipped automatically when POSTGRES_HOST is not set.
+    /// Requirement 5.2
+    #[tokio::test]
+    async fn test_postgres_get_schema_real() {
+        if env::var("POSTGRES_HOST").is_err() {
+            return;
+        }
+        let mut connector = PostgresConnector::new();
+        let config = get_postgres_config();
+        connector.connect(config).await.expect("connect");
+        let schema = connector.get_schema("information_schema.tables").await
+            .expect("get_schema");
+        assert!(!schema.columns.is_empty());
+        let _ = connector.disconnect().await;
+    }
 }

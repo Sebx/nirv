@@ -1,8 +1,11 @@
 use async_trait::async_trait;
+use std::fmt;
 use std::time::{Duration, Instant};
 use tiberius::{Client, Config, AuthMethod, EncryptionLevel};
 use tokio::net::TcpStream;
+use tokio::sync::Mutex;
 use tokio_util::compat::{TokioAsyncWriteCompatExt, Compat};
+use futures_util::TryStreamExt;
 
 use crate::connectors::{Connector, ConnectorInitConfig, ConnectorCapabilities};
 use crate::utils::{
@@ -14,18 +17,25 @@ use crate::utils::{
 };
 
 /// SQL Server connector using tiberius
-#[derive(Debug)]
 pub struct SqlServerConnector {
-    client: Option<Client<Compat<TcpStream>>>,
+    client: Mutex<Option<Client<Compat<TcpStream>>>>,
     connected: bool,
     connection_config: Option<Config>,
+}
+
+impl fmt::Debug for SqlServerConnector {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SqlServerConnector")
+            .field("connected", &self.connected)
+            .finish()
+    }
 }
 
 impl SqlServerConnector {
     /// Create a new SQL Server connector
     pub fn new() -> Self {
         Self {
-            client: None,
+            client: Mutex::new(None),
             connected: false,
             connection_config: None,
         }
@@ -236,8 +246,20 @@ impl SqlServerConnector {
         }
     }
     
+    /// Sanitize a table name for safe embedding in SQL strings.
+    /// Only allows alphanumeric characters, underscores, hyphens, and dots.
+    pub fn sanitize_table_name(name: &str) -> NirvResult<String> {
+        let valid = name.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-' || c == '.');
+        if valid && !name.is_empty() {
+            Ok(name.to_string())
+        } else {
+            Err(crate::utils::error::ConnectorError::SchemaRetrievalFailed(
+                format!("Invalid table name: '{}'", name)
+            ).into())
+        }
+    }
+
     /// Convert tiberius row value to internal Value representation
-    #[allow(dead_code)]
     fn convert_row_value(&self, row: &tiberius::Row, index: usize) -> NirvResult<Value> {
         // Try different types in order of likelihood
         if let Ok(Some(val)) = row.try_get::<&str, usize>(index) {
@@ -335,7 +357,7 @@ impl Connector for SqlServerConnector {
                 server, port, username, e
             )))?;
         
-        self.client = Some(client);
+        *self.client.lock().await = Some(client);
         self.connection_config = Some(tiberius_config);
         self.connected = true;
         
@@ -343,67 +365,170 @@ impl Connector for SqlServerConnector {
     }
     
     async fn execute_query(&self, query: ConnectorQuery) -> NirvResult<QueryResult> {
-        // For now, return a simple mock result since we can't easily test actual SQL Server connections
-        // In a real implementation, this would use the client to execute queries
+        if !self.connected {
+            return Err(ConnectorError::ConnectionFailed("Not connected to SQL Server".to_string()).into());
+        }
+
         let start_time = Instant::now();
-        
-        // Build SQL query to validate syntax
-        let _sql = self.build_sql_query(&query.query)?;
-        
-        let execution_time = start_time.elapsed();
-        
-        // Return mock result for testing
+        let sql = self.build_sql_query(&query.query)?;
+
+        let mut client_guard = self.client.lock().await;
+        let client = client_guard.as_mut()
+            .ok_or_else(|| ConnectorError::ConnectionFailed("No active SQL Server client".to_string()))?;
+
+        let mut stream = client.simple_query(sql.as_str()).await
+            .map_err(|e| ConnectorError::QueryExecutionFailed(
+                format!("SQL Server query execution failed: {}", e)
+            ))?;
+
+        let mut columns: Vec<ColumnMetadata> = Vec::new();
+        let mut rows: Vec<Row> = Vec::new();
+        let mut columns_built = false;
+
+        while let Some(item) = stream.try_next().await
+            .map_err(|e| ConnectorError::QueryExecutionFailed(format!("Error reading query stream: {}", e)))?
+        {
+            match item {
+                tiberius::QueryItem::Metadata(meta) => {
+                    if !columns_built {
+                        for col in meta.columns() {
+                            columns.push(ColumnMetadata {
+                                name: col.name().to_string(),
+                                data_type: self.sqlserver_type_to_data_type(
+                                    &format!("{:?}", col.column_type())
+                                ),
+                                nullable: true,
+                            });
+                        }
+                        columns_built = true;
+                    }
+                }
+                tiberius::QueryItem::Row(row) => {
+                    let values: Vec<Value> = (0..row.len())
+                        .map(|i| self.convert_row_value(&row, i).unwrap_or(Value::Null))
+                        .collect();
+                    rows.push(Row::new(values));
+                }
+            }
+        }
+
         Ok(QueryResult {
-            columns: vec![
-                ColumnMetadata {
-                    name: "id".to_string(),
-                    data_type: DataType::Integer,
-                    nullable: false,
-                },
-                ColumnMetadata {
-                    name: "name".to_string(),
-                    data_type: DataType::Text,
-                    nullable: true,
-                },
-            ],
-            rows: vec![
-                Row::new(vec![Value::Integer(1), Value::Text("Test User".to_string())]),
-            ],
-            affected_rows: Some(1),
-            execution_time,
+            columns,
+            rows,
+            affected_rows: None,
+            execution_time: start_time.elapsed(),
         })
     }
     
     async fn get_schema(&self, object_name: &str) -> NirvResult<Schema> {
-        // For now, return a mock schema for testing
-        // In a real implementation, this would query INFORMATION_SCHEMA tables
-        
+        if !self.connected {
+            return Err(ConnectorError::ConnectionFailed("Not connected to SQL Server".to_string()).into());
+        }
+
+        let _sanitized = Self::sanitize_table_name(object_name)?;
+
+        // Parse schema and table name from dot notation
+        let (schema_name, table_name) = if object_name.contains('.') {
+            let parts: Vec<&str> = object_name.splitn(2, '.').collect();
+            (parts[0].to_string(), parts[1].to_string())
+        } else {
+            ("%".to_string(), object_name.to_string())
+        };
+
+        let mut client_guard = self.client.lock().await;
+        let client = client_guard.as_mut()
+            .ok_or_else(|| ConnectorError::ConnectionFailed("No active SQL Server client".to_string()))?;
+
+        // Query column information from INFORMATION_SCHEMA
+        let col_sql = format!(
+            "SELECT COLUMN_NAME, DATA_TYPE, IS_NULLABLE, ORDINAL_POSITION \
+             FROM INFORMATION_SCHEMA.COLUMNS \
+             WHERE TABLE_NAME = '{}' AND TABLE_SCHEMA LIKE '{}' \
+             ORDER BY ORDINAL_POSITION",
+            table_name, schema_name
+        );
+
+        let mut columns: Vec<ColumnMetadata> = Vec::new();
+
+        {
+            let mut col_stream = client.simple_query(col_sql.as_str()).await
+                .map_err(|e| ConnectorError::SchemaRetrievalFailed(
+                    format!("Failed to query INFORMATION_SCHEMA.COLUMNS: {}", e)
+                ))?;
+
+            while let Some(item) = col_stream.try_next().await
+                .map_err(|e| ConnectorError::SchemaRetrievalFailed(format!("Error reading column stream: {}", e)))?
+            {
+                if let tiberius::QueryItem::Row(row) = item {
+                    let col_name: &str = row.try_get(0)
+                        .map_err(|e| ConnectorError::SchemaRetrievalFailed(format!("Failed to get COLUMN_NAME: {}", e)))?
+                        .unwrap_or("unknown");
+                    let data_type_str: &str = row.try_get(1)
+                        .map_err(|e| ConnectorError::SchemaRetrievalFailed(format!("Failed to get DATA_TYPE: {}", e)))?
+                        .unwrap_or("varchar");
+                    let is_nullable: &str = row.try_get(2)
+                        .map_err(|e| ConnectorError::SchemaRetrievalFailed(format!("Failed to get IS_NULLABLE: {}", e)))?
+                        .unwrap_or("YES");
+
+                    columns.push(ColumnMetadata {
+                        name: col_name.to_string(),
+                        data_type: self.sqlserver_type_to_data_type(data_type_str),
+                        nullable: is_nullable == "YES",
+                    });
+                }
+            }
+        } // col_stream is dropped here, releasing the mutable borrow on client
+
+        if columns.is_empty() {
+            return Err(ConnectorError::SchemaRetrievalFailed(
+                format!("Table '{}' not found in INFORMATION_SCHEMA", object_name)
+            ).into());
+        }
+
+        // Query primary key information
+        let pk_sql = format!(
+            "SELECT kcu.COLUMN_NAME \
+             FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE kcu \
+             JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc \
+               ON kcu.CONSTRAINT_NAME = tc.CONSTRAINT_NAME \
+               AND kcu.TABLE_NAME = tc.TABLE_NAME \
+             WHERE kcu.TABLE_NAME = '{}' \
+               AND tc.CONSTRAINT_TYPE = 'PRIMARY KEY' \
+             ORDER BY kcu.ORDINAL_POSITION",
+            table_name
+        );
+
+        let mut pk_columns: Vec<String> = Vec::new();
+
+        {
+            let mut pk_stream = client.simple_query(pk_sql.as_str()).await
+                .map_err(|e| ConnectorError::SchemaRetrievalFailed(
+                    format!("Failed to query primary keys: {}", e)
+                ))?;
+
+            while let Some(item) = pk_stream.try_next().await
+                .map_err(|e| ConnectorError::SchemaRetrievalFailed(format!("Error reading PK stream: {}", e)))?
+            {
+                if let tiberius::QueryItem::Row(row) = item {
+                    if let Ok(Some(col_name)) = row.try_get::<&str, usize>(0) {
+                        pk_columns.push(col_name.to_string());
+                    }
+                }
+            }
+        } // pk_stream is dropped here
+
+        let primary_key = if pk_columns.is_empty() { None } else { Some(pk_columns) };
+
         Ok(Schema {
             name: object_name.to_string(),
-            columns: vec![
-                ColumnMetadata {
-                    name: "id".to_string(),
-                    data_type: DataType::Integer,
-                    nullable: false,
-                },
-                ColumnMetadata {
-                    name: "name".to_string(),
-                    data_type: DataType::Text,
-                    nullable: true,
-                },
-                ColumnMetadata {
-                    name: "created_at".to_string(),
-                    data_type: DataType::DateTime,
-                    nullable: false,
-                },
-            ],
-            primary_key: Some(vec!["id".to_string()]),
+            columns,
+            primary_key,
             indexes: Vec::new(),
         })
     }
     
     async fn disconnect(&mut self) -> NirvResult<()> {
-        self.client = None;
+        *self.client.lock().await = None;
         self.connected = false;
         self.connection_config = None;
         Ok(())

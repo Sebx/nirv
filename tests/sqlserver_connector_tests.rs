@@ -128,9 +128,8 @@ async fn test_sqlserver_connector_query_without_connection() {
     let query = create_test_query("users");
     
     let result = connector.execute_query(query).await;
-    // The current implementation returns a mock result even without connection
-    // In a real implementation, this should return an error
-    assert!(result.is_ok());
+    // Operations require an active connection — disconnected state must return error
+    assert!(result.is_err());
 }
 
 #[tokio::test]
@@ -138,9 +137,8 @@ async fn test_sqlserver_connector_schema_retrieval_without_connection() {
     let connector = SqlServerConnector::new();
     
     let result = connector.get_schema("users").await;
-    // The current implementation returns a mock schema even without connection
-    // In a real implementation, this should return an error
-    assert!(result.is_ok());
+    // Operations require an active connection — disconnected state must return error
+    assert!(result.is_err());
 }
 
 #[tokio::test]
@@ -460,6 +458,37 @@ mod integration_tests {
             }
             other => panic!("Expected ConnectionFailed or Timeout error, got: {:?}", other),
         }
+    }
+
+    /// Validates: Requirement 4.1
+    /// Integration test for execute_query against a real SQL Server instance.
+    /// Skips silently when SQLSERVER_HOST is not set.
+    #[tokio::test]
+    async fn test_sqlserver_execute_query_real() {
+        if env::var("SQLSERVER_HOST").is_err() { return; }
+        let mut connector = SqlServerConnector::new();
+        let config = get_sqlserver_config();
+        connector.connect(config).await.expect("connect");
+        let query = create_test_query("INFORMATION_SCHEMA.TABLES");
+        let result = connector.execute_query(query).await
+            .expect("execute_query");
+        assert!(!result.columns.is_empty());
+        let _ = connector.disconnect().await;
+    }
+
+    /// Validates: Requirement 4.2
+    /// Integration test for get_schema against a real SQL Server instance.
+    /// Skips silently when SQLSERVER_HOST is not set.
+    #[tokio::test]
+    async fn test_sqlserver_get_schema_real() {
+        if env::var("SQLSERVER_HOST").is_err() { return; }
+        let mut connector = SqlServerConnector::new();
+        let config = get_sqlserver_config();
+        connector.connect(config).await.expect("connect");
+        let schema = connector.get_schema("INFORMATION_SCHEMA.TABLES").await
+            .expect("get_schema");
+        assert!(!schema.columns.is_empty());
+        let _ = connector.disconnect().await;
     }
 }
 

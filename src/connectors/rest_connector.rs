@@ -317,9 +317,8 @@ impl RestConnector {
     fn infer_schema_from_json(&self, data: &[JsonValue], object_name: &str) -> Schema {
         let mut columns = Vec::new();
         
-        if let Some(first_obj) = data.first() {
-            if let JsonValue::Object(obj) = first_obj {
-                for (key, value) in obj {
+        if let Some(JsonValue::Object(obj)) = data.first() {
+            for (key, value) in obj {
                     let data_type = match value {
                         JsonValue::Null => DataType::Text,
                         JsonValue::Bool(_) => DataType::Boolean,
